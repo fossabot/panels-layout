@@ -1,5 +1,5 @@
 <template>
-<div ref="container">
+<div ref="container" class="container">
     Panels here
     <div v-for="pane in _GetAllContent()" :key="pane.id" :style="pane.style" >
         <div v-if="pane.contentDesc === null" class="emptyContentPane" />
@@ -14,54 +14,43 @@
         <slot v-if="panel.isEmpty" name="emptyContent">
             Empty panel
         </slot>
+        <div v-for="grip in panel.GetCornerGrips()" class="cornerGrip" :style="grip.style">
+            <slot name="cornerGrip" :corner="grip.corner" :active="panel.IsGripActive(grip.corner)">
+                <div class="cornerGripIcon" :class="{active: panel.IsGripActive(grip.corner)}"
+                    :style="panel.GetCornerGripIconStyle(grip.corner)" />
+            </slot>
+        </div>
     </div>
 </div>
 </template>
 
 <script setup lang="ts">
 import type * as Vue from "vue"
-import { ref, reactive, computed, defineEmits, onMounted, onBeforeUnmount } from "vue"
+import { ref, reactive, computed, defineEmits, onMounted, onBeforeUnmount, watch } from "vue"
+import * as T from "./PublicTypes"
 
-/**
- * User-defined data which is used as a key to get actual component and its properties when
- * instantiating layout. Plain types should be used to allow easy serialization.
- */
-export type ContentSelector = any
-
-export interface ContentDescriptor {
-    /** Vue component class. */
-    component: any
-    /** Properties to bind to the instantiated component. */
-    props: Object
-}
-
-export type ContentDescriptorProvider = (selector: ContentSelector) => ContentDescriptor
-
-/**
- * Serializable type for saving and restoring current layout.
- */
-export interface LayoutDescriptor {
-    //XXX
-}
 
 const props = withDefaults(defineProps<{
-    contentDescriptorProvider: ContentDescriptorProvider,
+    contentDescriptorProvider: T.ContentDescriptorProvider,
     /** Minimal size in pixels for splitter child content. */
-    minSplitterContentSize: number,
+    minSplitterContentSize?: number,
     /** Spacing in pixels between splitter children. */
-    splitterSpacing: number
+    splitterSpacing?: number,
+    /** Size of corner grip zone for dragging. */
+    cornerGripSize?: number
 }>(), {
     minSplitterContentSize: 10,
-    splitterSpacing: 4
+    splitterSpacing: 4,
+    cornerGripSize: 14,
 })
 
 const _Emit = defineEmits<{
     /** Fired when layout is changed. */
-    (e: "layoutUpdated", layoutDesc: LayoutDescriptor)
+    (e: "layoutUpdated", layoutDesc: T.LayoutDescriptor)
 }>()
 
 /** Can be used to restore layout previously saved from `layoutUpdated` event. */
-function SetLayout(layoutDesc: LayoutDescriptor): void {
+function SetLayout(layoutDesc: T.LayoutDescriptor): void {
     //XXX
 }
 
@@ -75,17 +64,66 @@ enum SplitterOrientation {
     HORIZONTAL
 }
 
+class Rect {
+    x: number
+    y: number
+    width: number
+    height: number
+}
+
+class PanelBase {
+    parent: Splitter | null
+    childIndex: number
+    /** Absolute position in layout container bounds. */
+    rect = reactive(new Rect())
+
+    /**
+     * @param childrenPixelSize Information from parent about pixel size for all its children.
+     */
+    UpdateRect(childrenPixelSize?: number[]): void {
+        if (this.parent) {
+            if (!childrenPixelSize) {
+                throw new Error("childrenPixelSize not specified")
+            }
+            let pos = this.childIndex * props.splitterSpacing
+            for (let i = 0; i < this.childIndex; i++) {
+                pos += childrenPixelSize[i]
+            }
+            if (this.parent.orientation == SplitterOrientation.HORIZONTAL) {
+                this.rect.x = this.parent.rect.x + pos
+                this.rect.y = this.parent.rect.y
+                this.rect.width = childrenPixelSize[this.childIndex]
+                this.rect.height = this.parent.rect.height
+            } else {
+                this.rect.x = this.parent.rect.x
+                this.rect.y = this.parent.rect.y + pos
+                this.rect.width = this.parent.rect.width
+                this.rect.height = childrenPixelSize[this.childIndex]
+            }
+
+        } else {
+            this.rect.x = 0
+            this.rect.y = 0
+            this.rect.width = containerSize.width
+            this.rect.height = containerSize.height
+        }
+    }
+}
+
 /** Manages either vertically or horizontally split panels. Whole the split layout is formed by
  * hierarchy of these components.
  */
-class Splitter {
+class Splitter extends PanelBase {
     readonly orientation: SplitterOrientation
     /** Always has at least two children. */
-    readonly children: (Splitter|Panel)[]
-    readonly childrenSize: Vue.Ref<number[]> = ref([])
+    readonly children: (Splitter | Panel)[]
+    /** May be fractional, recalculated and snapped to pixels in UpdateRect() */
+    readonly childrenSize: number[] = []
 
-    constructor(orientation: SplitterOrientation, children: (Splitter|Panel)[],
+
+    constructor(orientation: SplitterOrientation, children: (Splitter | Panel)[],
                 childrenSize?: number[]) {
+        super()
         this.orientation = orientation
         if (children.length < 2) {
             throw new Error("Splitter must have at least two children")
@@ -96,23 +134,70 @@ class Splitter {
             if (childrenSize.length != children.length) {
                 throw new Error("`childrenSize` length should be equal to `children` length")
             }
-            this.childrenSize.value = childrenSize
+            this.childrenSize = childrenSize
         } else {
             for (let i = 0; i < children.length; i++) {
-                this.childrenSize.value.push(props.minSplitterContentSize)
+                this.childrenSize.push(props.minSplitterContentSize)
             }
         }
+
+        for (let i = 0; i < children.length; i++) {
+            const c = children[i]
+            c.parent = this
+            c.childIndex = i
+        }
+
         //XXX redistribute size
+    }
+
+    UpdateRect(): void {
+        super.UpdateRect()
+        const childrenPixelSize = this._CalculateChildrenPixelSize()
+        for (const child of this.children) {
+            child.UpdateRect(childrenPixelSize)
+        }
+    }
+
+    /** Distribute available space between all children proportionally to current children size data
+     * snapping to integer pixels.
+     */
+    _CalculateChildrenPixelSize(): number[] {
+
+        let totalSize = 0
+        const numChildren = this.childrenSize.length
+        for (let i = 0; i < numChildren; i++) {
+            totalSize += this.childrenSize[i]
+        }
+        const allocatableSize = (this.orientation == SplitterOrientation.HORIZONTAL ?
+            this.rect.width : this.rect.height) -
+            (this.children.length - 1) * props.splitterSpacing
+        const sizeRatio = allocatableSize / totalSize
+
+        const result: number[] = []
+        let curPos = 0
+        totalSize = 0
+        for (let i = 0; i < numChildren; i++) {
+            totalSize += this.childrenSize[i]
+            const newPos = Math.round(totalSize * sizeRatio)
+            result[i] = newPos - curPos
+            curPos = newPos
+        }
+        return result
     }
 
     //XXX should not allow last two children removal
     // Remove(idx)
 }
 
+type GripInfo = {
+    style: Vue.StyleValue
+    corner: T.Corner
+}
+
 /** Represents particular panel. Panel may have none (if empty), one or several (if tabbed) content
  * components . Panel parent is either splitter or null if root panel.
  */
-class Panel {
+class Panel extends PanelBase {
     readonly id: Id = _GenerateId()
     readonly children: ContentPane[] = []
 
@@ -120,18 +205,99 @@ class Panel {
         structureTracker.Touch()
         return this.children.length == 0
     }
+
+    *GetCornerGrips(): Generator<GripInfo> {
+        const commonStyle = {
+            width: props.cornerGripSize + "px",
+            height: props.cornerGripSize + "px",
+            cursor: "crosshair"
+        }
+        yield {
+            style: Object.assign({
+                top: "0",
+                left: "0"
+            }, commonStyle),
+            corner: T.Corner.TL
+        }
+        yield {
+            style: Object.assign({
+                top: "0",
+                right: "0"
+            }, commonStyle),
+            corner: T.Corner.TR
+        }
+        yield {
+            style: Object.assign({
+                bottom: "0",
+                left: "0"
+            }, commonStyle),
+            corner: T.Corner.BL
+        }
+        yield {
+            style: Object.assign({
+                bottom: "0",
+                right: "0"
+            }, commonStyle),
+            corner: T.Corner.BR
+        }
+    }
+
+    GetCornerGripIconStyle(corner: T.Corner): Vue.StyleValue {
+        switch (corner) {
+        case T.Corner.TL:
+            return {}
+        case T.Corner.TR:
+            return {
+                right: "0",
+                transform: "scaleX(-1)"
+            }
+        case T.Corner.BL:
+            return {
+                bottom: "0",
+                transform: "scaleY(-1)"
+            }
+        case T.Corner.BR:
+            return {
+                bottom: "0",
+                right: "0",
+                transform: "scaleX(-1) scaleY(-1)"
+            }
+        }
+        throw new Error("Bad corner")
+    }
+
+    IsGripActive(corner: T.Corner): boolean {
+        //XXX should be reactive
+        return false
+    }
 }
 
 /** Contains instantiated content component. */
 class ContentPane {
     readonly id: Id = _GenerateId()
+    readonly contentDesc: T.ContentDescriptor
     /** Reference to instantiated component. */
     componentRef: any
-
-    contentDesc: ContentDescriptor | null
+    parent: Panel
 
     //XXX reactivity
     style: any
+
+    constructor(desc: T.ContentDescriptor, parent: Panel)
+    {
+        this.contentDesc = desc
+        this.parent = parent
+    }
+
+    get minWidth() {
+        //XXX x,y per pane
+        return props.minSplitterContentSize
+    }
+
+    get minHeight() {
+        //XXX x,y per pane
+        return props.minSplitterContentSize
+    }
 }
 
 /** Helper class for manual tracking changes on complex data without making all the data reactive.
@@ -203,8 +369,35 @@ onBeforeUnmount(() => {
     resizeObserver.disconnect()
 })
 
+watch(containerSize, () => {
+    console.log(containerSize)//XXX
+    //XXX redistribute children size
+    root.UpdateRect()
+})
+
 </script>
 
 <style scoped lang="less">
+
+.container {
+    position: relative;
+}
+
+.cornerGrip {
+    position: absolute;
+}
+
+.cornerGripIcon {
+    width: 24px;
+    height: 24px;
+    pointer-events: none;
+    position: absolute;
+    visibility: hidden;
+    background-image: url("./assets/grip.svg");
+
+    :hover > & {
+        visibility: visible;;
+    }
+}
 
 </style>

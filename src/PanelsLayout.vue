@@ -14,10 +14,17 @@
         <slot v-if="panel.isEmpty" name="emptyContent">
             Empty panel
         </slot>
-        <div v-for="grip in panel.GetCornerGrips()" class="cornerGrip" :style="grip.style">
-            <slot name="cornerGrip" :corner="grip.corner" :active="panel.IsGripActive(grip.corner)">
-                <div class="cornerGripIcon" :class="{active: panel.IsGripActive(grip.corner)}"
-                    :style="panel.GetCornerGripIconStyle(grip.corner)" />
+        <div v-for="(grip, corner) in panel.grips" :ref="el => grip.element = el as HTMLElement"
+            class="cornerGrip" :style="grip.staticStyle"
+            @pointerdown="panel.OnGripPointerDown($event, corner)"
+            @pointerup="panel.OnGripPointerUp($event, corner)"
+            @pointercancel="panel.OnGripPointerUp($event, corner)"
+            @pointermove="panel.OnGripPointerMove($event, corner)" >
+
+            <!-- XXX active needed? -->
+            <slot name="cornerGrip" :corner="corner" :active="grip.isActive">
+                <div class="cornerGripIcon" :class="{active: grip.isActive}"
+                    :style="panel.GetCornerGripIconStyle(corner)" />
             </slot>
         </div>
     </div>
@@ -26,7 +33,7 @@
 
 <script setup lang="ts">
 import type * as Vue from "vue"
-import { ref, reactive, computed, defineEmits, onMounted, onBeforeUnmount, watch } from "vue"
+import { ref, reactive, defineEmits, onMounted, onBeforeUnmount, watch } from "vue"
 import * as T from "./PublicTypes"
 
 
@@ -37,11 +44,20 @@ const props = withDefaults(defineProps<{
     /** Spacing in pixels between splitter children. */
     splitterSpacing?: number,
     /** Size of corner grip zone for dragging. */
-    cornerGripSize?: number
+    cornerGripSize?: number,
+    /** Minimal drag distance in pixels before panel splitting. */
+    panelInwardDragThreshold?: number
+    /** Minimal difference between drag distance in pixels along X and Y axes to take decision about
+     * split direction.
+     */
+    panelSplitDragDifferenceThreshold?: number
+
 }>(), {
     minSplitterContentSize: 10,
     splitterSpacing: 4,
     cornerGripSize: 14,
+    panelInwardDragThreshold: 16,
+    panelSplitDragDifferenceThreshold: 12
 })
 
 const _Emit = defineEmits<{
@@ -64,11 +80,30 @@ enum SplitterOrientation {
     HORIZONTAL
 }
 
+type Vector = {
+    x: number,
+    y: number
+}
+
 class Rect {
     x: number
     y: number
     width: number
     height: number
+}
+
+/** Get axes directions towards panel content from the specified corner. */
+function GetCornerOrientation(corner: T.Corner): Vector {
+    switch (corner) {
+    case T.Corner.TL:
+        return {x: 1, y: 1}
+    case T.Corner.TR:
+        return {x: -1, y: 1}
+    case T.Corner.BL:
+        return {x: 1, y: -1}
+    case T.Corner.BR:
+        return {x: -1, y: -1}
+    }
 }
 
 class PanelBase {
@@ -189,9 +224,38 @@ class Splitter extends PanelBase {
     // Remove(idx)
 }
 
-type GripInfo = {
-    style: Vue.StyleValue
-    corner: T.Corner
+class GripInfo {
+    readonly staticStyle: Vue.CSSProperties
+    //XXX is needed?
+    readonly isActive = ref(false)
+    element?: HTMLElement
+
+    constructor(staticStyle: Vue.CSSProperties) {
+        this.staticStyle = Object.assign({}, {
+            width: props.cornerGripSize + "px",
+            height: props.cornerGripSize + "px",
+            cursor: "crosshair"
+        }, staticStyle)
+    }
+}
+
+const enum GripDragState {
+    /** No decision about action to take. */
+    INITIAL,
+    /** Expand panel to the neighbor splitter. */
+    EXPAND,
+    /** Pointer moved back to the panel after expand intention. */
+    EXPAND_CANCELLED
+    /* No state for panel splitting because this action is taken immediately and the drag state is
+     * transferred to a splitter.
+     */
+}
+
+type GripDragInfo = {
+    pointerId: any | null,
+    startPos: Vector
+    //XXX reactive?
+    state: GripDragState
 }
 
 /** Represents particular panel. Panel may have none (if empty), one or several (if tabbed) content
@@ -200,46 +264,39 @@ type GripInfo = {
 class Panel extends PanelBase {
     readonly id: Id = _GenerateId()
     readonly children: ContentPane[] = []
+    readonly grips: {[corner in T.Corner]: GripInfo}
+
+    readonly gripDragInfo: GripDragInfo = {
+        pointerId: null,
+        startPos: {x: 0, y: 0},
+        state: GripDragState.INITIAL
+    }
+
+    constructor() {
+        super()
+        this.grips = {
+            [T.Corner.TL]: new GripInfo({
+                top: "0",
+                left: "0"
+            }),
+            [T.Corner.TR]: new GripInfo({
+                top: "0",
+                right: "0"
+            }),
+            [T.Corner.BL]: new GripInfo({
+                bottom: "0",
+                left: "0"
+            }),
+            [T.Corner.BR]: new GripInfo({
+                bottom: "0",
+                right: "0"
+            })
+        }
+    }
 
     get isEmpty() {
         structureTracker.Touch()
         return this.children.length == 0
-    }
-
-    *GetCornerGrips(): Generator<GripInfo> {
-        const commonStyle = {
-            width: props.cornerGripSize + "px",
-            height: props.cornerGripSize + "px",
-            cursor: "crosshair"
-        }
-        yield {
-            style: Object.assign({
-                top: "0",
-                left: "0"
-            }, commonStyle),
-            corner: T.Corner.TL
-        }
-        yield {
-            style: Object.assign({
-                top: "0",
-                right: "0"
-            }, commonStyle),
-            corner: T.Corner.TR
-        }
-        yield {
-            style: Object.assign({
-                bottom: "0",
-                left: "0"
-            }, commonStyle),
-            corner: T.Corner.BL
-        }
-        yield {
-            style: Object.assign({
-                bottom: "0",
-                right: "0"
-            }, commonStyle),
-            corner: T.Corner.BR
-        }
     }
 
     GetCornerGripIconStyle(corner: T.Corner): Vue.StyleValue {
@@ -263,12 +320,55 @@ class Panel extends PanelBase {
                 transform: "scaleX(-1) scaleY(-1)"
             }
         }
-        throw new Error("Bad corner")
     }
 
-    IsGripActive(corner: T.Corner): boolean {
-        //XXX should be reactive
-        return false
+    OnGripPointerDown(e: PointerEvent, corner: T.Corner) {
+        if (e.altKey || e.shiftKey || e.ctrlKey) {
+            return
+        }
+        this.gripDragInfo.pointerId = e.pointerId
+        this.gripDragInfo.startPos.x = e.pageX
+        this.gripDragInfo.startPos.y = e.pageY
+        const grip = this.grips[corner]
+        grip.isActive.value = true
+        grip.element!.setPointerCapture(e.pointerId)
+    }
+
+    OnGripPointerUp(e: PointerEvent, corner: T.Corner) {
+        if (this.gripDragInfo.pointerId === null) {
+            return
+        }
+        const grip = this.grips[corner]
+        grip.isActive.value = false
+        grip.element!.releasePointerCapture(this.gripDragInfo.pointerId)
+
+        if (this.gripDragInfo.state === GripDragState.EXPAND) {
+            //XXX rebuild splitters if dragged outwards
+        }
+
+        this.gripDragInfo.pointerId = null
+        this.gripDragInfo.state = GripDragState.INITIAL
+    }
+
+    OnGripPointerMove(e: PointerEvent, corner: T.Corner) {
+        if (this.gripDragInfo.pointerId === null) {
+            return
+        }
+
+        const dir = GetCornerOrientation(corner)
+        const d = {x: (e.pageX - this.gripDragInfo.startPos.x) * dir.x,
+                   y: (e.pageY - this.gripDragInfo.startPos.y) * dir.y}
+
+        if (this.gripDragInfo.state === GripDragState.INITIAL) {
+            if (d.x >= 0 && d.y >= 0 &&
+                (d.x >= props.panelInwardDragThreshold || d.y >= props.panelInwardDragThreshold) &&
+                Math.abs(d.x - d.y) > props.panelSplitDragDifferenceThreshold) {
+
+                //XXX make split
+                console.log("split")
+            }
+        }
+        //XXX
     }
 }
 

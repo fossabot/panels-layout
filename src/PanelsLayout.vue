@@ -7,6 +7,11 @@
     </div>
 
     <!-- XXX render splitters -->
+    <template v-for="splitter in _GetAllSplitters()" :key="splitter.id">
+        <div v-for="(sep, index) in splitter.separators" :key="index" class="separator"
+            :ref="el => sep.element = el as HTMLElement"
+            :style="splitter.GetSeparatorStyle(index)" />
+    </template>
 
     <!-- XXX render all panels -->
     <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
@@ -52,14 +57,19 @@ const props = withDefaults(defineProps<{
     /** Minimal difference between drag distance in pixels along X and Y axes to take decision about
      * split direction.
      */
-    panelSplitDragDifferenceThreshold?: number
+    panelSplitDragDifferenceThreshold?: number,
+    /** Width of splitter zone between child items which is draggable. Usually should be larger than
+     * `splitterSpacing` to have actual draggable zone expanded past visible spacing.
+     */
+    splitterDragZoneSize?: number,
 
 }>(), {
     minSplitterContentSize: 10,
     splitterSpacing: 4,
     cornerGripSize: 14,
     panelInwardDragThreshold: 16,
-    panelSplitDragDifferenceThreshold: 12
+    panelSplitDragDifferenceThreshold: 12,
+    splitterDragZoneSize: 8
 })
 
 const _Emit = defineEmits<{
@@ -99,33 +109,28 @@ class Rect {
 }
 
 class PanelBase {
+    readonly id: Id = _GenerateId()
     parent: Splitter | null
     childIndex: number
     /** Absolute position in layout container bounds. */
     rect = reactive(new Rect())
 
-    /**
-     * @param childrenPixelSize Information from parent about pixel size for all its children.
-     */
-    UpdateRect(childrenPixelSize?: number[]): void {
+    UpdateRect(): void {
         if (this.parent) {
-            if (!childrenPixelSize) {
-                return
-            }
             let pos = this.childIndex * props.splitterSpacing
             for (let i = 0; i < this.childIndex; i++) {
-                pos += childrenPixelSize[i]
+                pos += this.parent.childrenPixelSize[i]
             }
             if (this.parent.orientation == SplitterOrientation.HORIZONTAL) {
                 this.rect.x = this.parent.rect.x + pos
                 this.rect.y = this.parent.rect.y
-                this.rect.width = childrenPixelSize[this.childIndex]
+                this.rect.width = this.parent.childrenPixelSize[this.childIndex]
                 this.rect.height = this.parent.rect.height
             } else {
                 this.rect.x = this.parent.rect.x
                 this.rect.y = this.parent.rect.y + pos
                 this.rect.width = this.parent.rect.width
-                this.rect.height = childrenPixelSize[this.childIndex]
+                this.rect.height = this.parent.childrenPixelSize[this.childIndex]
             }
 
         } else {
@@ -154,6 +159,24 @@ class PanelBase {
     }
 }
 
+type SplitterDragInfo = {
+    pointerId: any | null,
+    /** Index of separator to drag. */
+    index: number
+    /** Start coordinate (page CS). */
+    startPointerPos: number
+    /** Start position of the separator being dragged. */
+    startSeparatorPos: number
+    /** Offset in pixels of drag point from separator center. */
+    dragOffset: number
+}
+
+class SplitterSeparator {
+    element?: HTMLElement
+    readonly isActive = ref(false)
+    readonly staticStyle: Vue.CSSProperties
+}
+
 /** Manages either vertically or horizontally split panels. Whole the split layout is formed by
  * hierarchy of these components.
  */
@@ -163,7 +186,16 @@ class Splitter extends PanelBase {
     readonly children: (Splitter | Panel)[]
     /** May be fractional, recalculated and snapped to pixels in UpdateRect() */
     readonly childrenSize: number[] = []
-
+    readonly childrenPixelSize: number[] = []
+    /** Drag in progress when `pointerId` is not null. */
+    readonly dragInfo: SplitterDragInfo = {
+        pointerId: null,
+        index: 0,
+        startPointerPos: 0,
+        startSeparatorPos: 0,
+        dragOffset: 0
+    }
+    readonly separators: SplitterSeparator[] = []
 
     constructor(orientation: SplitterOrientation, children: (Splitter | Panel)[],
                 childrenSize?: number[]) {
@@ -189,27 +221,57 @@ class Splitter extends PanelBase {
             const c = children[i]
             c.parent = this
             c.childIndex = i
+            if (i != 0) {
+                this.separators.push(new SplitterSeparator())
+            }
         }
 
         //XXX redistribute size
     }
 
-    /** Updates only children if `childrenPixelSize` is not specified. */
-    UpdateRect(childrenPixelSize?: number[]): void {
-        super.UpdateRect(childrenPixelSize)
-        childrenPixelSize = this._CalculateChildrenPixelSize()
+    UpdateRect(): void {
+        super.UpdateRect()
+        this._CalculateChildrenPixelSize()
         for (const child of this.children) {
-            child.UpdateRect(childrenPixelSize)
+            child.UpdateRect()
         }
+    }
+
+    GetSeparatorStyle(index: number): Vue.CSSProperties {
+        let pos = props.splitterSpacing * index
+        for (let i = 0; i <= index; i++) {
+            pos += this.childrenPixelSize[i]
+        }
+        pos -= (props.splitterDragZoneSize - props.splitterSpacing) / 2
+
+        let style: Vue.CSSProperties
+        if (this.orientation === SplitterOrientation.HORIZONTAL) {
+            style = {
+                top: this.rect.y + "px",
+                height: this.rect.height + "px",
+                left: pos + "px",
+                width: props.splitterDragZoneSize + "px"
+            }
+        } else {
+            style = {
+                left: this.rect.x + "px",
+                width: this.rect.width + "px",
+                top: pos + "px",
+                height: props.splitterDragZoneSize + "px"
+            }
+        }
+        style.cursor = this.orientation === SplitterOrientation.HORIZONTAL ?
+            "col-resize" : "row-resize"
+        return style
     }
 
     /** Distribute available space between all children proportionally to current children size data
      * snapping to integer pixels.
      */
-    _CalculateChildrenPixelSize(): number[] {
-
+    _CalculateChildrenPixelSize() {
         let totalSize = 0
         const numChildren = this.childrenSize.length
+        this.childrenPixelSize.length = numChildren
         for (let i = 0; i < numChildren; i++) {
             totalSize += this.childrenSize[i]
         }
@@ -217,27 +279,25 @@ class Splitter extends PanelBase {
             (this.children.length - 1) * props.splitterSpacing
         const sizeRatio = allocatableSize / totalSize
 
-        const result: number[] = []
         let curPos = 0
         totalSize = 0
         for (let i = 0; i < numChildren; i++) {
             totalSize += this.childrenSize[i]
             const newPos = Math.round(totalSize * sizeRatio)
-            result[i] = newPos - curPos
+            this.childrenPixelSize[i] = newPos - curPos
             curPos = newPos
         }
-        return result
     }
 
     //XXX should not allow last two children removal
     // Remove(idx)
 }
 
-class GripInfo {
+class CornerGrip {
+    element?: HTMLElement
     readonly staticStyle: Vue.CSSProperties
     //XXX is needed?
     readonly isActive = ref(false)
-    element?: HTMLElement
 
     constructor(staticStyle: Vue.CSSProperties) {
         this.staticStyle = Object.assign({}, {
@@ -273,9 +333,8 @@ type GripDragInfo = {
  * components . Panel parent is either splitter or null if root panel.
  */
 class Panel extends PanelBase {
-    readonly id: Id = _GenerateId()
     readonly children: ContentPane[] = []
-    readonly grips: {[corner in T.Corner]: GripInfo}
+    readonly grips: {[corner in T.Corner]: CornerGrip}
 
     readonly gripDragInfo: GripDragInfo = {
         pointerId: null,
@@ -287,19 +346,19 @@ class Panel extends PanelBase {
     constructor() {
         super()
         this.grips = {
-            [T.Corner.TL]: new GripInfo({
+            [T.Corner.TL]: new CornerGrip({
                 top: "0",
                 left: "0"
             }),
-            [T.Corner.TR]: new GripInfo({
+            [T.Corner.TR]: new CornerGrip({
                 top: "0",
                 right: "0"
             }),
-            [T.Corner.BL]: new GripInfo({
+            [T.Corner.BL]: new CornerGrip({
                 bottom: "0",
                 left: "0"
             }),
-            [T.Corner.BR]: new GripInfo({
+            [T.Corner.BR]: new CornerGrip({
                 bottom: "0",
                 right: "0"
             })
@@ -342,8 +401,6 @@ class Panel extends PanelBase {
      * @return True if split successful, false if split not possible.
      */
     Split(orientation: SplitterOrientation, splitPos: number, newFirst: boolean): boolean {
-        console.log("split", splitPos)//XXX
-
         const parent = this.parent
         if (parent && parent.orientation === orientation) {
             //XXX insert in parent
@@ -360,8 +417,8 @@ class Panel extends PanelBase {
                 return false
             } else {
                 root = splitter
-                splitter.UpdateRect()
             }
+            splitter.UpdateRect()
             structureTracker.Update()
         }
         return true
@@ -392,7 +449,7 @@ class Panel extends PanelBase {
     }
 
     OnGripPointerUp(e: PointerEvent, corner: T.Corner): void {
-        if (this.gripDragInfo.pointerId === null) {
+        if (e.pointerId !== this.gripDragInfo.pointerId) {
             return
         }
         if (this.gripDragInfo.state === GripDragState.EXPAND) {
@@ -402,7 +459,7 @@ class Panel extends PanelBase {
     }
 
     OnGripPointerMove(e: PointerEvent, corner: T.Corner): void {
-        if (this.gripDragInfo.pointerId === null) {
+        if (e.pointerId !== this.gripDragInfo.pointerId) {
             return
         }
 
@@ -507,6 +564,11 @@ function _GetCornerOrientation(corner: T.Corner): Vector {
     }
 }
 
+function _OppositeOrientation(orientation: SplitterOrientation): SplitterOrientation {
+    return orientation === SplitterOrientation.HORIZONTAL ?
+        SplitterOrientation.VERTICAL : SplitterOrientation.HORIZONTAL
+}
+
 /** @return Flattened list of all content panes. */
 function *_GetAllContent(): Generator<ContentPane, any, undefined> {
     for (const panel of _GetAllPanels()) {
@@ -523,6 +585,21 @@ function *_GetAllPanels(): Generator<Panel> {
                 yield *IterateItem(child)
             }
         } else {
+            yield item
+        }
+    }
+
+    structureTracker.Touch()
+    yield *IterateItem(root)
+}
+
+/** @return Flattened list of all splitters (depth first traversal order). */
+function *_GetAllSplitters(): Generator<Splitter, any, undefined> {
+    function *IterateItem(item: Panel | Splitter) {
+        if (item instanceof Splitter) {
+            for (const child of item.children) {
+                yield *IterateItem(child)
+            }
             yield item
         }
     }
@@ -585,8 +662,13 @@ watch(containerSize, () => {
     background-image: url("./assets/grip.svg");
 
     :hover > & {
-        visibility: visible;;
+        visibility: visible;
     }
+}
+
+.separator {
+    position: absolute;
+    user-select: none;
 }
 
 </style>

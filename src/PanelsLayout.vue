@@ -1,6 +1,5 @@
 <template>
 <div ref="container" class="container">
-    Panels here
     <div v-for="pane in _GetAllContent()" :key="pane.id" :style="pane.style" >
         <div v-if="pane.contentDesc === null" class="emptyContentPane" />
         <component v-else :is="pane.contentDesc.component" v-bind="pane.contentDesc.props"
@@ -10,11 +9,14 @@
     <!-- XXX render splitters -->
 
     <!-- XXX render all panels -->
-    <div v-for="panel in _GetAllPanels()" :key="panel.id">
+    <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
+        :style="panel.positionStyle">
         <slot v-if="panel.isEmpty" name="emptyContent">
-            Empty panel
+            <!-- XXX -->
+            <div style="width: 100%;height:100%;background-color: darkgreen;">Empty panel {{panel.id}}</div>
         </slot>
-        <div v-for="(grip, corner) in panel.grips" :ref="el => grip.element = el as HTMLElement"
+        <div v-for="(grip, corner) in panel.grips" :key="corner"
+            :ref="el => grip.element = el as HTMLElement"
             class="cornerGrip" :style="grip.staticStyle"
             @pointerdown="panel.OnGripPointerDown($event, corner)"
             @pointerup="panel.OnGripPointerUp($event, corner)"
@@ -90,19 +92,9 @@ class Rect {
     y: number
     width: number
     height: number
-}
 
-/** Get axes directions towards panel content from the specified corner. */
-function GetCornerOrientation(corner: T.Corner): Vector {
-    switch (corner) {
-    case T.Corner.TL:
-        return {x: 1, y: 1}
-    case T.Corner.TR:
-        return {x: -1, y: 1}
-    case T.Corner.BL:
-        return {x: 1, y: -1}
-    case T.Corner.BR:
-        return {x: -1, y: -1}
+    GetAxisSize(orientation: SplitterOrientation): number {
+        return orientation === SplitterOrientation.HORIZONTAL ? this.width : this.height
     }
 }
 
@@ -118,7 +110,7 @@ class PanelBase {
     UpdateRect(childrenPixelSize?: number[]): void {
         if (this.parent) {
             if (!childrenPixelSize) {
-                throw new Error("childrenPixelSize not specified")
+                return
             }
             let pos = this.childIndex * props.splitterSpacing
             for (let i = 0; i < this.childIndex; i++) {
@@ -141,6 +133,23 @@ class PanelBase {
             this.rect.y = 0
             this.rect.width = containerSize.width
             this.rect.height = containerSize.height
+        }
+    }
+
+    PageToClientCoord(x: number, y: number): Vector {
+        const result = _PageToLayoutCoord(x, y)
+        result.x -= this.rect.x
+        result.y -= this.rect.y
+        return result
+    }
+
+    /** Reactive style attributes for absolute positioning inside the container. */
+    get positionStyle() {
+        return {
+            left: this.rect.x + "px",
+            top: this.rect.y + "px",
+            right: containerSize.width - this.rect.x - this.rect.width + "px",
+            bottom: containerSize.height - this.rect.y - this.rect.height + "px"
         }
     }
 }
@@ -185,9 +194,10 @@ class Splitter extends PanelBase {
         //XXX redistribute size
     }
 
-    UpdateRect(): void {
-        super.UpdateRect()
-        const childrenPixelSize = this._CalculateChildrenPixelSize()
+    /** Updates only children if `childrenPixelSize` is not specified. */
+    UpdateRect(childrenPixelSize?: number[]): void {
+        super.UpdateRect(childrenPixelSize)
+        childrenPixelSize = this._CalculateChildrenPixelSize()
         for (const child of this.children) {
             child.UpdateRect(childrenPixelSize)
         }
@@ -203,8 +213,7 @@ class Splitter extends PanelBase {
         for (let i = 0; i < numChildren; i++) {
             totalSize += this.childrenSize[i]
         }
-        const allocatableSize = (this.orientation == SplitterOrientation.HORIZONTAL ?
-            this.rect.width : this.rect.height) -
+        const allocatableSize = this.rect.GetAxisSize(this.orientation) -
             (this.children.length - 1) * props.splitterSpacing
         const sizeRatio = allocatableSize / totalSize
 
@@ -253,6 +262,8 @@ const enum GripDragState {
 
 type GripDragInfo = {
     pointerId: any | null,
+    corner: T.Corner
+    /** Page CS. */
     startPos: Vector
     //XXX reactive?
     state: GripDragState
@@ -268,6 +279,7 @@ class Panel extends PanelBase {
 
     readonly gripDragInfo: GripDragInfo = {
         pointerId: null,
+        corner: T.Corner.TL,
         startPos: {x: 0, y: 0},
         state: GripDragState.INITIAL
     }
@@ -322,11 +334,45 @@ class Panel extends PanelBase {
         }
     }
 
-    OnGripPointerDown(e: PointerEvent, corner: T.Corner) {
+    /**
+     * @param splitPos Split position in pixels along split axis. Origin is the panel client
+     *      rectangle origin.
+     * @param newFirst True if new panel precedes this one in a splitter, false if it is inserted
+     *      next to this one.
+     * @return True if split successful, false if split not possible.
+     */
+    Split(orientation: SplitterOrientation, splitPos: number, newFirst: boolean): boolean {
+        console.log("split", splitPos)//XXX
+
+        const parent = this.parent
+        if (parent && parent.orientation === orientation) {
+            //XXX insert in parent
+            return false
+        } else {
+            /* Create new splitter. */
+            const panel = new Panel()
+            const children = newFirst ? [panel, this] : [this, panel]
+            const size1 = splitPos - props.splitterSpacing / 2
+            const size2 = this.rect.GetAxisSize(orientation) - props.splitterSpacing - size1
+            const splitter = new Splitter(orientation, children, [size1, size2])
+            if (parent) {
+                //XXX
+                return false
+            } else {
+                root = splitter
+                splitter.UpdateRect()
+            }
+            structureTracker.Update()
+        }
+        return true
+    }
+
+    OnGripPointerDown(e: PointerEvent, corner: T.Corner): void {
         if (e.altKey || e.shiftKey || e.ctrlKey) {
             return
         }
         this.gripDragInfo.pointerId = e.pointerId
+        this.gripDragInfo.corner = corner
         this.gripDragInfo.startPos.x = e.pageX
         this.gripDragInfo.startPos.y = e.pageY
         const grip = this.grips[corner]
@@ -334,38 +380,54 @@ class Panel extends PanelBase {
         grip.element!.setPointerCapture(e.pointerId)
     }
 
-    OnGripPointerUp(e: PointerEvent, corner: T.Corner) {
+    EndGripDrag() {
         if (this.gripDragInfo.pointerId === null) {
             return
         }
-        const grip = this.grips[corner]
+        const grip = this.grips[this.gripDragInfo.corner]
         grip.isActive.value = false
         grip.element!.releasePointerCapture(this.gripDragInfo.pointerId)
-
-        if (this.gripDragInfo.state === GripDragState.EXPAND) {
-            //XXX rebuild splitters if dragged outwards
-        }
-
         this.gripDragInfo.pointerId = null
         this.gripDragInfo.state = GripDragState.INITIAL
     }
 
-    OnGripPointerMove(e: PointerEvent, corner: T.Corner) {
+    OnGripPointerUp(e: PointerEvent, corner: T.Corner): void {
+        if (this.gripDragInfo.pointerId === null) {
+            return
+        }
+        if (this.gripDragInfo.state === GripDragState.EXPAND) {
+            //XXX rebuild splitters if dragged outwards
+        }
+        this.EndGripDrag()
+    }
+
+    OnGripPointerMove(e: PointerEvent, corner: T.Corner): void {
         if (this.gripDragInfo.pointerId === null) {
             return
         }
 
-        const dir = GetCornerOrientation(corner)
+        const dir = _GetCornerOrientation(corner)
         const d = {x: (e.pageX - this.gripDragInfo.startPos.x) * dir.x,
                    y: (e.pageY - this.gripDragInfo.startPos.y) * dir.y}
+        const clientCoord = this.PageToClientCoord(e.pageX, e.pageY)
 
         if (this.gripDragInfo.state === GripDragState.INITIAL) {
             if (d.x >= 0 && d.y >= 0 &&
                 (d.x >= props.panelInwardDragThreshold || d.y >= props.panelInwardDragThreshold) &&
                 Math.abs(d.x - d.y) > props.panelSplitDragDifferenceThreshold) {
 
-                //XXX make split
-                console.log("split")
+
+                if (!this.Split(
+                    d.x > d.y ? SplitterOrientation.HORIZONTAL : SplitterOrientation.VERTICAL,
+                    d.x > d.y ? clientCoord.x : clientCoord.y,
+                    d.x > d.y ? dir.x > 0 : dir.y > 0)) {
+
+                    this.EndGripDrag()
+                    return
+                }
+                //XXX transfer drag
+                this.EndGripDrag()
+                return
             }
         }
         //XXX
@@ -419,7 +481,7 @@ class ReactiveTracker {
 // /////////////////////////////////////////////////////////////////////////////////////////////////
 // Private state and methods
 
-const root: Panel | Splitter = new Panel()
+let root: Panel | Splitter = new Panel()
 const container: Vue.Ref<HTMLDivElement | null> = ref(null)
 const resizeObserver = new ResizeObserver(_OnContainerResize)
 /** Tracks all changes in content hierarchy. */
@@ -428,7 +490,21 @@ const containerSize = reactive({width: 0, height: 0})
 
 function _GenerateId(): Id {
     return Date.now().toString(36).slice(-6) +
-        (Math.random() * Number.MAX_SAFE_INTEGER).toString(36)
+        Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString(36)
+}
+
+/** Get axes directions towards panel content from the specified corner. */
+function _GetCornerOrientation(corner: T.Corner): Vector {
+    switch (corner) {
+    case T.Corner.TL:
+        return {x: 1, y: 1}
+    case T.Corner.TR:
+        return {x: -1, y: 1}
+    case T.Corner.BL:
+        return {x: 1, y: -1}
+    case T.Corner.BR:
+        return {x: -1, y: -1}
+    }
 }
 
 /** @return Flattened list of all content panes. */
@@ -461,6 +537,14 @@ function _OnContainerResize(entries: ResizeObserverEntry[]) {
     containerSize.height = sz.blockSize
 }
 
+function _PageToLayoutCoord(x: number, y: number): Vector {
+    const rect = container.value!.getBoundingClientRect()
+    return {
+        x: x - rect.x - window.scrollX,
+        y: y - rect.y - window.scrollY
+    }
+}
+
 onMounted(() => {
     resizeObserver.observe(container.value!)
 })
@@ -483,8 +567,13 @@ watch(containerSize, () => {
     position: relative;
 }
 
+.panel {
+    position: absolute;
+}
+
 .cornerGrip {
     position: absolute;
+    user-select: none;
 }
 
 .cornerGripIcon {

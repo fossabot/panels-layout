@@ -17,7 +17,11 @@
     <template v-for="splitter in _GetAllSplitters()" :key="splitter.id">
         <div v-for="(sep, index) in splitter.separators" :key="index" class="separator"
             :ref="el => sep.element = el as HTMLElement"
-            :style="splitter.GetSeparatorStyle(index)" />
+            :style="splitter.GetSeparatorStyle(index)"
+            @pointerdown="splitter.OnSeparatorPointerDown($event, index)"
+            @pointerup="splitter.OnSeparatorPointerUp($event, index)"
+            @pointercancel="splitter.OnSeparatorPointerUp($event, index)"
+            @pointermove="splitter.OnSeparatorPointerMove($event, index)" />
     </template>
 
     <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
@@ -66,7 +70,7 @@ const props = withDefaults(defineProps<{
     splitterDragZoneSize?: number,
 
 }>(), {
-    minSplitterContentSize: 10,
+    minSplitterContentSize: 30,
     splitterSpacing: 4,
     cornerGripSize: 14,
     panelInwardDragThreshold: 16,
@@ -167,10 +171,14 @@ type SplitterDragInfo = {
     index: number
     /** Start coordinate (page CS). */
     startPointerPos: number
-    /** Start position of the separator being dragged. */
-    startSeparatorPos: number
-    /** Offset in pixels of drag point from separator center. */
+    /** Offset in pixels of drag point from separator origin. */
     dragOffset: number
+    /** Children raw size sum. */
+    sizeSum: number
+    /** Initial raw size of first children. */
+    startSize: number
+    /** Pixel size to raw size ratio. */
+    pixRatio: number
 }
 
 class SplitterSeparator {
@@ -194,10 +202,13 @@ class Splitter extends PanelBase {
         pointerId: null,
         index: 0,
         startPointerPos: 0,
-        startSeparatorPos: 0,
-        dragOffset: 0
+        dragOffset: 0,//XXX is needed?
+        sizeSum: 0,
+        startSize: 0,
+        pixRatio: 0
     }
     readonly separators: SplitterSeparator[] = []
+    readonly layoutTracker = new ReactiveTracker()
 
     constructor(orientation: SplitterOrientation, children: (Splitter | Panel)[],
                 childrenSize?: number[]) {
@@ -240,6 +251,8 @@ class Splitter extends PanelBase {
     }
 
     GetSeparatorStyle(index: number): Vue.CSSProperties {
+        this.layoutTracker.Touch()
+
         let pos = props.splitterSpacing * index
         for (let i = 0; i <= index; i++) {
             pos += this.childrenPixelSize[i]
@@ -289,6 +302,69 @@ class Splitter extends PanelBase {
             this.childrenPixelSize[i] = newPos - curPos
             curPos = newPos
         }
+        this.layoutTracker.Update()
+    }
+
+    EndDrag(): void {
+        if (this.dragInfo.pointerId === null) {
+            return
+        }
+        const sep = this.separators[this.dragInfo.index]
+        sep.isActive.value = false
+        sep.element!.releasePointerCapture(this.dragInfo.pointerId)
+        this.dragInfo.pointerId = null
+        //XXX update children rect
+    }
+
+    OnSeparatorPointerDown(e: PointerEvent, index: number): void {
+        if (e.altKey || e.shiftKey || e.ctrlKey) {
+            return
+        }
+        this.dragInfo.pointerId = e.pointerId
+        this.dragInfo.index = index
+        this.dragInfo.startPointerPos = this.orientation === SplitterOrientation.HORIZONTAL ?
+            e.pageX : e.pageY
+        const sep = this.separators[index]
+        sep.isActive.value = true
+        sep.element!.setPointerCapture(e.pointerId)
+        this.dragInfo.dragOffset = this.orientation === SplitterOrientation.HORIZONTAL ?
+            e.offsetX : e.offsetY
+
+        this.dragInfo.sizeSum = this.childrenSize[index] + this.childrenSize[index + 1]
+        this.dragInfo.startSize = this.childrenSize[index]
+        const pixSum = this.childrenPixelSize[index] + this.childrenPixelSize[index + 1]
+        this.dragInfo.pixRatio = pixSum / this.dragInfo.sizeSum
+    }
+
+    OnSeparatorPointerUp(e: PointerEvent, index: number): void {
+        if (e.pointerId !== this.dragInfo.pointerId) {
+            return
+        }
+        this.EndDrag()
+    }
+
+    OnSeparatorPointerMove(e: PointerEvent, index: number): void {
+        if (e.pointerId !== this.dragInfo.pointerId) {
+            return
+        }
+        const minSize = props.minSplitterContentSize / this.dragInfo.pixRatio
+        const maxSize = this.dragInfo.sizeSum - minSize
+        if (minSize >= maxSize) {
+            /* No place for adjustment. */
+            return
+        }
+        const dragDelta =
+            (this.orientation === SplitterOrientation.HORIZONTAL ? e.pageX : e.pageY) -
+            this.dragInfo.startPointerPos
+        let newSize = this.dragInfo.startSize + dragDelta / this.dragInfo.pixRatio
+        if (newSize < minSize) {
+            newSize = minSize
+        } else if (newSize > maxSize) {
+            newSize = maxSize
+        }
+        this.childrenSize[index] = newSize
+        this.childrenSize[index + 1] = this.dragInfo.sizeSum - newSize
+        this.UpdateRect()
     }
 
     //XXX should not allow last two children removal

@@ -182,7 +182,6 @@ type SplitterDragInfo = {
 class SplitterSeparator {
     element?: HTMLElement
     readonly isActive = ref(false)
-    readonly staticStyle: Vue.CSSProperties
 }
 
 /** Manages either vertically or horizontally split panels. Whole the split layout is formed by
@@ -235,8 +234,6 @@ class Splitter extends PanelBase {
                 this.separators.push(new SplitterSeparator())
             }
         }
-
-        //XXX redistribute size
     }
 
     UpdateRect(): void {
@@ -325,7 +322,6 @@ class Splitter extends PanelBase {
         sep.isActive.value = false
         sep.element!.releasePointerCapture(this.dragInfo.pointerId)
         this.dragInfo.pointerId = null
-        //XXX update children rect
     }
 
     OnSeparatorPointerDown(e: PointerEvent, index: number): void {
@@ -364,6 +360,18 @@ class Splitter extends PanelBase {
         this.childrenSize[index] = newSize
         this.childrenSize[index + 1] = this.dragInfo.sizeSum - newSize
         this.UpdateRect()
+    }
+
+    Insert(child: Panel | Splitter, index: number, size: number): void {
+        this.children.splice(index, 0, child)
+        this.childrenSize.splice(index, 0, size)
+        this.separators.splice(index, 0, new SplitterSeparator())
+        for (let i = index; i < this.children.length; i++) {
+            this.children[i].childIndex = i
+        }
+        child.parent = this
+        this.UpdateRect()
+        structureTracker.Update()
     }
 
     //XXX should not allow last two children removal
@@ -478,19 +486,25 @@ class Panel extends PanelBase {
      * @return True if split successful, false if split not possible.
      */
     Split(orientation: SplitterOrientation, splitPos: number, newFirst: boolean): boolean {
-        const parent = this.parent
-        if (this.rect.GetAxisSize(orientation) < props.minSplitterContentSize * 2) {
+        const initialPixelSize = this.rect.GetAxisSize(orientation)
+        if (initialPixelSize < props.minSplitterContentSize * 2 + props.splitterSpacing) {
             return false
         }
+        const parent = this.parent
+        const panel = new Panel()
+        const size1 = splitPos - props.splitterSpacing / 2
+        const size2 = initialPixelSize - props.splitterSpacing - size1
         if (parent && parent.orientation === orientation) {
-            //XXX insert in parent
-            return false
+            /* Insert new sibling in parent splitter. */
+            const pixelRatio = initialPixelSize / parent.childrenSize[this.childIndex]
+            parent.childrenSize[this.childIndex] = (newFirst ? size2 : size1) / pixelRatio
+            parent.Insert(panel, newFirst ? this.childIndex : this.childIndex + 1,
+                (newFirst ? size1 : size2) / pixelRatio)
+
         } else {
             /* Create new splitter. */
-            const panel = new Panel()
+
             const children = newFirst ? [panel, this] : [this, panel]
-            const size1 = splitPos - props.splitterSpacing / 2
-            const size2 = this.rect.GetAxisSize(orientation) - props.splitterSpacing - size1
             const splitter = new Splitter(orientation, children, [size1, size2])
             if (parent) {
                 //XXX
@@ -729,8 +743,6 @@ onBeforeUnmount(() => {
 })
 
 watch(containerSize, () => {
-    console.log(containerSize)//XXX
-    //XXX redistribute children size
     root.UpdateRect()
 })
 

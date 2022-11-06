@@ -46,7 +46,7 @@
 
 <script setup lang="ts">
 import type * as Vue from "vue"
-import { ref, reactive, defineEmits, onMounted, onBeforeUnmount, watch } from "vue"
+import { ref, reactive, defineEmits, onMounted, onBeforeUnmount, watch, nextTick } from "vue"
 import * as T from "./PublicTypes"
 
 
@@ -171,8 +171,6 @@ type SplitterDragInfo = {
     index: number
     /** Start coordinate (page CS). */
     startPointerPos: number
-    /** Offset in pixels of drag point from separator origin. */
-    dragOffset: number
     /** Children raw size sum. */
     sizeSum: number
     /** Initial raw size of first children. */
@@ -202,7 +200,6 @@ class Splitter extends PanelBase {
         pointerId: null,
         index: 0,
         startPointerPos: 0,
-        dragOffset: 0,//XXX is needed?
         sizeSum: 0,
         startSize: 0,
         pixRatio: 0
@@ -305,6 +302,21 @@ class Splitter extends PanelBase {
         this.layoutTracker.Update()
     }
 
+    StartDrag(e: PointerEvent, index: number): void {
+        this.dragInfo.pointerId = e.pointerId
+        this.dragInfo.index = index
+        this.dragInfo.startPointerPos = this.orientation === SplitterOrientation.HORIZONTAL ?
+            e.pageX : e.pageY
+        const sep = this.separators[index]
+        sep.isActive.value = true
+        sep.element!.setPointerCapture(e.pointerId)
+
+        this.dragInfo.sizeSum = this.childrenSize[index] + this.childrenSize[index + 1]
+        this.dragInfo.startSize = this.childrenSize[index]
+        const pixSum = this.childrenPixelSize[index] + this.childrenPixelSize[index + 1]
+        this.dragInfo.pixRatio = pixSum / this.dragInfo.sizeSum
+    }
+
     EndDrag(): void {
         if (this.dragInfo.pointerId === null) {
             return
@@ -320,20 +332,7 @@ class Splitter extends PanelBase {
         if (e.altKey || e.shiftKey || e.ctrlKey) {
             return
         }
-        this.dragInfo.pointerId = e.pointerId
-        this.dragInfo.index = index
-        this.dragInfo.startPointerPos = this.orientation === SplitterOrientation.HORIZONTAL ?
-            e.pageX : e.pageY
-        const sep = this.separators[index]
-        sep.isActive.value = true
-        sep.element!.setPointerCapture(e.pointerId)
-        this.dragInfo.dragOffset = this.orientation === SplitterOrientation.HORIZONTAL ?
-            e.offsetX : e.offsetY
-
-        this.dragInfo.sizeSum = this.childrenSize[index] + this.childrenSize[index + 1]
-        this.dragInfo.startSize = this.childrenSize[index]
-        const pixSum = this.childrenPixelSize[index] + this.childrenPixelSize[index + 1]
-        this.dragInfo.pixRatio = pixSum / this.dragInfo.sizeSum
+        this.StartDrag(e, index)
     }
 
     OnSeparatorPointerUp(e: PointerEvent, index: number): void {
@@ -480,6 +479,9 @@ class Panel extends PanelBase {
      */
     Split(orientation: SplitterOrientation, splitPos: number, newFirst: boolean): boolean {
         const parent = this.parent
+        if (this.rect.GetAxisSize(orientation) < props.minSplitterContentSize * 2) {
+            return false
+        }
         if (parent && parent.orientation === orientation) {
             //XXX insert in parent
             return false
@@ -551,17 +553,20 @@ class Panel extends PanelBase {
                 (d.x >= props.panelInwardDragThreshold || d.y >= props.panelInwardDragThreshold) &&
                 Math.abs(d.x - d.y) > props.panelSplitDragDifferenceThreshold) {
 
-
+                const newFirst = d.x > d.y ? dir.x > 0 : dir.y > 0
                 if (!this.Split(
                     d.x > d.y ? SplitterOrientation.HORIZONTAL : SplitterOrientation.VERTICAL,
                     d.x > d.y ? clientCoord.x : clientCoord.y,
-                    d.x > d.y ? dir.x > 0 : dir.y > 0)) {
+                    newFirst)) {
 
                     this.EndGripDrag()
                     return
                 }
-                //XXX transfer drag
                 this.EndGripDrag()
+                /* Ensure splitter separator element is created to set pointer capture on. */
+                nextTick(() => {
+                    this.parent!.StartDrag(e, newFirst ? this.childIndex - 1 : this.childIndex)
+                })
                 return
             }
         }

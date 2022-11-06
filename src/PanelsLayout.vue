@@ -1,25 +1,27 @@
 <template>
 <div ref="container" class="container">
-    <div v-for="pane in _GetAllContent()" :key="pane.id" :style="pane.style" >
-        <div v-if="pane.contentDesc === null" class="emptyContentPane" />
-        <component v-else :is="pane.contentDesc.component" v-bind="pane.contentDesc.props"
+    <div v-for="pane in _GetAllContent()" :key="pane.id" class="pane"
+        :style="pane.positionStyle" >
+        <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props"
             :ref="el => pane.componentRef = el" />
     </div>
 
-    <!-- XXX render splitters -->
+    <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
+        :style="panel.positionStyle">
+        <slot name="emptyContent">
+            <!-- XXX -->
+            <div style="width: 100%;height:100%;background-color: darkgreen;">Empty panel {{panel.id}}</div>
+        </slot>
+    </div>
+
     <template v-for="splitter in _GetAllSplitters()" :key="splitter.id">
         <div v-for="(sep, index) in splitter.separators" :key="index" class="separator"
             :ref="el => sep.element = el as HTMLElement"
             :style="splitter.GetSeparatorStyle(index)" />
     </template>
 
-    <!-- XXX render all panels -->
     <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
         :style="panel.positionStyle">
-        <slot v-if="panel.isEmpty" name="emptyContent">
-            <!-- XXX -->
-            <div style="width: 100%;height:100%;background-color: darkgreen;">Empty panel {{panel.id}}</div>
-        </slot>
         <div v-for="(grip, corner) in panel.grips" :key="corner"
             :ref="el => grip.element = el as HTMLElement"
             class="cornerGrip" :style="grip.staticStyle"
@@ -69,7 +71,7 @@ const props = withDefaults(defineProps<{
     cornerGripSize: 14,
     panelInwardDragThreshold: 16,
     panelSplitDragDifferenceThreshold: 12,
-    splitterDragZoneSize: 8
+    splitterDragZoneSize: 10
 })
 
 const _Emit = defineEmits<{
@@ -153,8 +155,8 @@ class PanelBase {
         return {
             left: this.rect.x + "px",
             top: this.rect.y + "px",
-            right: containerSize.width - this.rect.x - this.rect.width + "px",
-            bottom: containerSize.height - this.rect.y - this.rect.height + "px"
+            width: this.rect.width + "px",
+            height: this.rect.height + "px"
         }
     }
 }
@@ -330,7 +332,7 @@ type GripDragInfo = {
 }
 
 /** Represents particular panel. Panel may have none (if empty), one or several (if tabbed) content
- * components . Panel parent is either splitter or null if root panel.
+ * components. Panel parent is either splitter or null if root panel.
  */
 class Panel extends PanelBase {
     readonly children: ContentPane[] = []
@@ -517,6 +519,12 @@ class ContentPane {
         //XXX x,y per pane
         return props.minSplitterContentSize
     }
+
+    /** Reactive style attributes for absolute positioning inside the container. */
+    get positionStyle() {
+        //XXX account tab height if any
+        return this.parent.positionStyle
+    }
 }
 
 /** Helper class for manual tracking changes on complex data without making all the data reactive.
@@ -593,6 +601,15 @@ function *_GetAllPanels(): Generator<Panel> {
     yield *IterateItem(root)
 }
 
+/** @return Flattened list of all empty panels. */
+function *_GetAllEmptyPanels(): Generator<Panel> {
+    for (const panel of _GetAllPanels()) {
+        if (panel.children.length === 0) {
+            yield panel
+        }
+    }
+}
+
 /** @return Flattened list of all splitters (depth first traversal order). */
 function *_GetAllSplitters(): Generator<Splitter, any, undefined> {
     function *IterateItem(item: Panel | Splitter) {
@@ -644,13 +661,23 @@ watch(containerSize, () => {
     position: relative;
 }
 
+.pane {
+    position: absolute;
+}
+
+.emptyPanel {
+    position: absolute;
+}
+
 .panel {
     position: absolute;
+    pointer-events: none;
 }
 
 .cornerGrip {
     position: absolute;
     user-select: none;
+    pointer-events: all;
 }
 
 .cornerGripIcon {

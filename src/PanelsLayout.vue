@@ -258,14 +258,14 @@ class Splitter extends PanelBase {
             style = {
                 top: this.rect.y + "px",
                 height: this.rect.height + "px",
-                left: pos + "px",
+                left: this.rect.x + pos + "px",
                 width: props.splitterDragZoneSize + "px"
             }
         } else {
             style = {
                 left: this.rect.x + "px",
                 width: this.rect.width + "px",
-                top: pos + "px",
+                top: this.rect.y + pos + "px",
                 height: props.splitterDragZoneSize + "px"
             }
         }
@@ -362,7 +362,7 @@ class Splitter extends PanelBase {
         this.UpdateRect()
     }
 
-    Insert(child: Panel | Splitter, index: number, size: number): void {
+    InsertChild(child: Panel | Splitter, index: number, size: number): void {
         this.children.splice(index, 0, child)
         this.childrenSize.splice(index, 0, size)
         this.separators.splice(index, 0, new SplitterSeparator())
@@ -374,8 +374,17 @@ class Splitter extends PanelBase {
         structureTracker.Update()
     }
 
+    /** Replace current child at the specified index. */
+    SetChild(child: Panel | Splitter, index: number): void {
+        this.children[index] = child
+        child.parent = this
+        child.childIndex = index
+        child.UpdateRect()
+        structureTracker.Update()
+    }
+
     //XXX should not allow last two children removal
-    // Remove(idx)
+    // RemoveChild(idx)
 }
 
 class CornerGrip {
@@ -498,22 +507,21 @@ class Panel extends PanelBase {
             /* Insert new sibling in parent splitter. */
             const pixelRatio = initialPixelSize / parent.childrenSize[this.childIndex]
             parent.childrenSize[this.childIndex] = (newFirst ? size2 : size1) / pixelRatio
-            parent.Insert(panel, newFirst ? this.childIndex : this.childIndex + 1,
+            parent.InsertChild(panel, newFirst ? this.childIndex : this.childIndex + 1,
                 (newFirst ? size1 : size2) / pixelRatio)
 
         } else {
             /* Create new splitter. */
-
             const children = newFirst ? [panel, this] : [this, panel]
+            const childIdx = this.childIndex
             const splitter = new Splitter(orientation, children, [size1, size2])
             if (parent) {
-                //XXX
-                return false
+                parent.SetChild(splitter, childIdx)
             } else {
                 root = splitter
+                splitter.UpdateRect()
+                structureTracker.Update()
             }
-            splitter.UpdateRect()
-            structureTracker.Update()
         }
         return true
     }

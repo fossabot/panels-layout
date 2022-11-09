@@ -26,3 +26,10 @@
      BL = "BL",
      BR = "BR"
  }
+
+ export const enum Direction {
+    UP = "UP",
+    DOWN = "DOWN",
+    LEFT = "LEFT",
+    RIGHT = "RIGHT"
+ }

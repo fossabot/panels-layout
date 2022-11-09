@@ -41,12 +41,34 @@
             </slot>
         </div>
     </div>
+
+    <template v-if="expandGhost !== null">
+        <div class="expandGhostFrom" :style="expandGhost.expandInfo.fromRect.positionStyle">
+            <slot name="expandGhostFrom" :isActive="expandGhost.isActive"
+                :dir="expandGhost.expandInfo.dir">
+                <div class="default" :class="{active: expandGhost.isActive}" />
+            </slot>
+        </div>
+        <div class="expandGhostTo" :style="expandGhost.expandInfo.toRect.positionStyle">
+            <slot name="expandGhostTo" :isActive="expandGhost.isActive"
+                :dir="expandGhost.expandInfo.dir">
+                <div class="default" :class="{active: expandGhost.isActive}" />
+            </slot>
+        </div>
+        <div class="expandGhostResult" :style="expandGhost.expandInfo.resultRect.positionStyle">
+            <slot name="expandGhostResult" :isActive="expandGhost.isActive"
+                :dir="expandGhost.expandInfo.dir">
+                <div class="default" :class="{active: expandGhost.isActive}" />
+            </slot>
+        </div>
+    </template>
+
 </div>
 </template>
 
 <script setup lang="ts">
 import type * as Vue from "vue"
-import { ref, reactive, defineEmits, onMounted, onBeforeUnmount, watch, nextTick } from "vue"
+import { ref, reactive, onMounted, onBeforeUnmount, watch, nextTick } from "vue"
 import * as T from "./PublicTypes"
 
 
@@ -68,6 +90,8 @@ const props = withDefaults(defineProps<{
      * `splitterSpacing` to have actual draggable zone expanded past visible spacing.
      */
     splitterDragZoneSize?: number,
+    /** Minimal drag distance in pixels before panel expanding. */
+    panelOutwardDragThreshold?: number
 
 }>(), {
     minSplitterContentSize: 30,
@@ -75,7 +99,8 @@ const props = withDefaults(defineProps<{
     cornerGripSize: 14,
     panelInwardDragThreshold: 16,
     panelSplitDragDifferenceThreshold: 12,
-    splitterDragZoneSize: 10
+    splitterDragZoneSize: 10,
+    panelOutwardDragThreshold: 16
 })
 
 const _Emit = defineEmits<{
@@ -109,12 +134,52 @@ class Rect {
     width: number
     height: number
 
+    constructor(x: number = 0, y: number = 0, width: number = 0, height: number = 0) {
+        this.x = x
+        this.y = y
+        this.width = width
+        this.height = height
+    }
+
     GetAxisSize(orientation: SplitterOrientation): number {
         return orientation === SplitterOrientation.HORIZONTAL ? this.width : this.height
     }
+
+    get positionStyle() {
+        return {
+            left: this.x + "px",
+            top: this.y + "px",
+            width: this.width + "px",
+            height: this.height + "px"
+        }
+    }
+
+    get area() {
+        return this.width * this.height
+    }
+
+    Intersect(other: Rect): Rect | null {
+        const x = Math.max(this.x, other.x)
+        const right = Math.min(this.x + this.width, other.x + other.width)
+        if (right <= x) {
+            return null
+        }
+        const y = Math.max(this.y, other.y)
+        const bottom = Math.min(this.y + this.height, other.y + other.height)
+        if (bottom <= y) {
+            return null
+        }
+        return new Rect(x, y, right - x, bottom - y)
+    }
 }
 
-class PanelBase {
+type ExpandGhostInfo = {
+    /** True if is about to expand, false if is about to cancel. */
+    isActive: boolean
+    expandInfo: ExpandInfo
+}
+
+abstract class PanelBase {
     readonly id: Id = _GenerateId()
     parent: Splitter | null
     childIndex: number
@@ -154,14 +219,12 @@ class PanelBase {
         return result
     }
 
+    /** Get panel if any under the specified layout coordinates. */
+    abstract HitTestPanel(x: number, y: number): Panel | null
+
     /** Reactive style attributes for absolute positioning inside the container. */
     get positionStyle() {
-        return {
-            left: this.rect.x + "px",
-            top: this.rect.y + "px",
-            width: this.rect.width + "px",
-            height: this.rect.height + "px"
-        }
+        return this.rect.positionStyle
     }
 }
 
@@ -385,6 +448,24 @@ class Splitter extends PanelBase {
 
     //XXX should not allow last two children removal
     // RemoveChild(idx)
+
+    HitTestPanel(x: number, y: number): Panel | null {
+        if (x < this.rect.x || x >= this.rect.x + this.rect.width ||
+            y < this.rect.y || y >= this.rect.y + this.rect.height) {
+            return null
+        }
+        const pos = this.orientation === SplitterOrientation.HORIZONTAL ?
+            x - this.rect.x : y - this.rect.y
+        let curPos = 0
+        for (let i = 0; i < this.childrenPixelSize.length; i++) {
+            const size = this.childrenPixelSize[i]
+            if (pos >= curPos && pos < curPos + size) {
+                return this.children[i].HitTestPanel(x, y)
+            }
+            curPos += size + props.splitterSpacing
+        }
+        return null
+    }
 }
 
 class CornerGrip {
@@ -408,7 +489,7 @@ const enum GripDragState {
     /** Expand panel to the neighbor splitter. */
     EXPAND,
     /** Pointer moved back to the panel after expand intention. */
-    EXPAND_CANCELLED
+    EXPAND_CANCELLED,
     /* No state for panel splitting because this action is taken immediately and the drag state is
      * transferred to a splitter.
      */
@@ -436,6 +517,9 @@ class Panel extends PanelBase {
         startPos: {x: 0, y: 0},
         state: GripDragState.INITIAL
     }
+
+    expandTarget: Panel | null = null
+
 
     constructor() {
         super()
@@ -569,6 +653,7 @@ class Panel extends PanelBase {
         const d = {x: (e.pageX - this.gripDragInfo.startPos.x) * dir.x,
                    y: (e.pageY - this.gripDragInfo.startPos.y) * dir.y}
         const clientCoord = this.PageToClientCoord(e.pageX, e.pageY)
+        const lytCoords = _PageToLayoutCoord(e.pageX, e.pageY)
 
         if (this.gripDragInfo.state === GripDragState.INITIAL) {
             if (d.x >= 0 && d.y >= 0 &&
@@ -591,8 +676,36 @@ class Panel extends PanelBase {
                 })
                 return
             }
+
+            if ((d.x < 0 || d.y < 0) &&
+                (d.x <= -props.panelOutwardDragThreshold || d.y <= -props.panelOutwardDragThreshold)) {
+
+                const target = root.HitTestPanel(lytCoords.x, lytCoords.y)
+                if (!target) {
+                    return
+                }
+                const expandInfo = _CalculateExpandInfo(this.rect, target.rect)
+                if (!expandInfo) {
+                    return
+                }
+                expandGhost.value = {
+                    isActive: true,
+                    expandInfo
+                }
+                this.expandTarget = target
+                this.gripDragInfo.state = GripDragState.EXPAND
+                return
+            }
         }
         //XXX
+    }
+
+    HitTestPanel(x: number, y: number): Panel | null {
+        if (x < this.rect.x || x >= this.rect.x + this.rect.width ||
+            y < this.rect.y || y >= this.rect.y + this.rect.height) {
+            return null
+        }
+        return this
     }
 }
 
@@ -655,6 +768,7 @@ const resizeObserver = new ResizeObserver(_OnContainerResize)
 /** Tracks all changes in content hierarchy. */
 const structureTracker = new ReactiveTracker()
 const containerSize = reactive({width: 0, height: 0})
+const expandGhost: Vue.Ref<ExpandGhostInfo | null> = ref(null)
 
 function _GenerateId(): Id {
     return Date.now().toString(36).slice(-6) +
@@ -742,6 +856,87 @@ function _PageToLayoutCoord(x: number, y: number): Vector {
     }
 }
 
+type ExpandInfo = {
+    fromRect: Rect
+    toRect: Rect
+    resultRect: Rect
+    dir: T.Direction
+}
+
+/** Calculate resulting rectangle after expanding r1 to r2. Returns null if not possible to expand
+ * into the provided rectangle.
+ */
+function _CalculateExpandInfo(r1: Rect, r2: Rect): ExpandInfo | null {
+    /* Select direction with maximal expand area. */
+    let maxDir: T.Direction | null = null
+    let maxArea = 0
+    let maxResultRect: Rect | null = null, maxToRect: Rect | null = null
+    for (const dir of [T.Direction.LEFT, T.Direction.RIGHT, T.Direction.UP, T.Direction.DOWN]) {
+        const rect = _CalculateExpandRect(r1, r2, dir)
+        if (rect == null) {
+            continue
+        }
+        const toRect = rect.Intersect(r2)
+        if (toRect == null) {
+            continue
+        }
+        const area = toRect.area
+        if (maxDir == null || area > maxArea) {
+            maxDir = dir
+            maxArea = area
+            maxResultRect = rect
+            maxToRect = toRect
+        }
+    }
+    if (maxDir == null) {
+        return null
+    }
+    const fromRect = maxResultRect!.Intersect(r1)
+    if (fromRect == null) {
+        return null
+    }
+    return {
+        fromRect,
+        toRect: maxToRect!,
+        resultRect: maxResultRect!,
+        dir: maxDir
+    }
+}
+
+function _CalculateExpandRect(r1: Rect, r2: Rect, dir: T.Direction): Rect | null {
+    let x: number, y: number, right: number, bottom: number
+    switch (dir) {
+    case T.Direction.RIGHT:
+        x = r1.x
+        right = r2.x + r2.width
+        y = Math.max(r1.y, r2.y)
+        bottom = Math.min(r1.y + r1.height, r2.y + r2.height)
+        break
+    case T.Direction.DOWN:
+        y = r1.y
+        bottom = r2.y + r2.height
+        x = Math.max(r1.x, r2.x)
+        right = Math.min(r1.x + r1.width, r2.x + r2.width)
+        break
+    case T.Direction.LEFT:
+        x = r2.x
+        right = r1.x + r1.width
+        y = Math.max(r1.y, r2.y)
+        bottom = Math.min(r1.y + r1.height, r2.y + r2.height)
+        break
+    case T.Direction.UP:
+        y = r2.y
+        bottom = r1.y + r1.height
+        x = Math.max(r1.x, r2.x)
+        right = Math.min(r1.x + r1.width, r2.x + r2.width)
+        break
+    }
+    if (right <= x || bottom <= y) {
+        return null
+    }
+    return new Rect(x, y, right - x, bottom - y)
+}
+
 onMounted(() => {
     resizeObserver.observe(container.value!)
 })
@@ -797,6 +992,40 @@ watch(containerSize, () => {
 .separator {
     position: absolute;
     user-select: none;
+}
+
+.expandGhost {
+    position: absolute;
+}
+
+.expandGhostFrom, .expandGhostTo {
+    .expandGhost();
+
+    .default {
+        width: 100%;
+        height: 100%;
+        opacity: 0.4;
+        background-color: aqua;//XXX
+
+        &.active {
+            background-color: orange;//XXX
+        }
+    }
+}
+
+.expandGhostResult {
+    .expandGhost();
+
+    .default {
+        width: 100%;
+        height: 100%;
+        border: 2px solid rgb(255, 126, 126);//XXX
+        border-radius: 4px;
+
+        &.active {
+            border-color: red;//XXX
+        }
+    }
 }
 
 </style>

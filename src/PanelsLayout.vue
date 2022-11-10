@@ -171,6 +171,11 @@ class Rect {
         }
         return new Rect(x, y, right - x, bottom - y)
     }
+
+    Contains(x: number, y: number): boolean {
+        return x >= this.x && x < this.x + this.width &&
+               y >= this.y && y < this.y + this.height
+    }
 }
 
 type ExpandGhostInfo = {
@@ -446,8 +451,19 @@ class Splitter extends PanelBase {
         structureTracker.Update()
     }
 
-    //XXX should not allow last two children removal
-    // RemoveChild(idx)
+    /** Remove the specified child. At least two children should be left. */
+    RemoveChild(index: number) {
+        if (this.children.length === 2) {
+            throw new Error("Cannot remove last two children")
+        }
+        this.children.splice(index, 1)
+        this.childrenSize.splice(index, 1)
+        for (let i = index; i < this.children.length; i++) {
+            this.children[i].childIndex = i
+        }
+        this.UpdateRect()
+        structureTracker.Update()
+    }
 
     HitTestPanel(x: number, y: number): Panel | null {
         if (x < this.rect.x || x >= this.rect.x + this.rect.width ||
@@ -610,6 +626,34 @@ class Panel extends PanelBase {
         return true
     }
 
+    Expand(target: Panel) {
+        const parent: Splitter = this.parent!
+        /* Merge with sibling panel if it is the case. */
+        if (target.parent === parent) {
+            const siblingIdx = target.childIndex
+            if (siblingIdx !== this.childIndex - 1 && siblingIdx !== this.childIndex + 1) {
+                /* Can merge only with neighbor sibling panel. */
+                return
+            }
+            if (this.parent!.children.length > 2) {
+                this.parent!.childrenSize[this.childIndex] += this.parent!.childrenSize[siblingIdx]
+                this.parent!.RemoveChild(siblingIdx)
+            } else {
+                const grandParent = parent.parent
+                if (grandParent) {
+                    grandParent.SetChild(this, parent.childIndex)
+                } else {
+                    root = this
+                    this.parent = null
+                    this.UpdateRect()
+                    structureTracker.Update()
+                }
+            }
+            return
+        }
+        //XXX rebuild splitters if dragged outwards
+    }
+
     OnGripPointerDown(e: PointerEvent, corner: T.Corner): void {
         if (e.altKey || e.shiftKey || e.ctrlKey) {
             return
@@ -632,6 +676,8 @@ class Panel extends PanelBase {
         grip.element!.releasePointerCapture(this.gripDragInfo.pointerId)
         this.gripDragInfo.pointerId = null
         this.gripDragInfo.state = GripDragState.INITIAL
+        this.expandTarget = null
+        expandGhost.value = null
     }
 
     OnGripPointerUp(e: PointerEvent, corner: T.Corner): void {
@@ -639,7 +685,7 @@ class Panel extends PanelBase {
             return
         }
         if (this.gripDragInfo.state === GripDragState.EXPAND) {
-            //XXX rebuild splitters if dragged outwards
+            this.Expand(this.expandTarget!)
         }
         this.EndGripDrag()
     }
@@ -696,8 +742,25 @@ class Panel extends PanelBase {
                 this.gripDragInfo.state = GripDragState.EXPAND
                 return
             }
+
+            return
         }
-        //XXX
+
+        if (this.gripDragInfo.state === GripDragState.EXPAND) {
+            if (!this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
+                this.gripDragInfo.state = GripDragState.EXPAND_CANCELLED
+                expandGhost.value!.isActive = false
+            }
+            return
+        }
+
+        if (this.gripDragInfo.state === GripDragState.EXPAND_CANCELLED) {
+            if (this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
+                this.gripDragInfo.state = GripDragState.EXPAND
+                expandGhost.value!.isActive = true
+            }
+            return
+        }
     }
 
     HitTestPanel(x: number, y: number): Panel | null {

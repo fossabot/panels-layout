@@ -14,17 +14,14 @@
         </slot>
     </div>
 
-    <!-- <template v-for="splitter in _GetAllSplitters()" :key="splitter.id">
-        <div v-for="(sep, index) in splitter.separators" :key="index" class="separator"
-            :ref="el => sep.element = el as HTMLElement"
-            :style="splitter.GetSeparatorStyle(index)"
-            @pointerdown="splitter.OnSeparatorPointerDown($event, index)"
-            @pointerup="splitter.OnSeparatorPointerUp($event, index)"
-            @pointercancel="splitter.OnSeparatorPointerUp($event, index)"
-            @pointermove="splitter.OnSeparatorPointerMove($event, index)" />
-    </template> -->
+    <div v-for="edge in edges.values()" :key="edge.id" class="separator"
+        :ref="el => edge.element = el as HTMLElement" :style="edge.separatorStyle"
+            @pointerdown="edge.OnPointerDown($event)"
+            @pointerup="edge.OnPointerUp($event)"
+            @pointercancel="edge.OnPointerUp($event)"
+            @pointermove="edge.OnPointerMove($event)" />
 
-    <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
+    <div v-for="panel in panels.values()" :key="panel.id" class="panel"
         :style="panel.positionStyle">
         <div v-for="(grip, corner) in panel.grips" :key="corner"
             :ref="el => grip.element = el as HTMLElement"
@@ -182,6 +179,18 @@ class Rect {
     }
 }
 
+type EdgeDragInfo = {
+    pointerId: any | null,
+    /** Start coordinate (page CS). */
+    startPointerPos: number
+    /** Initial position value. */
+    startPos: number
+    /** Pre-calculated minimal position limit. */
+    minPos: number
+    /** Pre-calculated maximal position limit. */
+    maxPos: number
+}
+
 /** Moveable edge. Panels may have some of their edges bound to one such. */
 class Edge {
     readonly id: Id = _GenerateId()
@@ -191,6 +200,20 @@ class Edge {
      * edge right or bottom.
      */
     readonly children: Map<Id, Panel>[] = [new Map(), new Map()]
+    /** Separator element. */
+    element?: HTMLElement
+    /** True when being dragged. */
+    readonly isActive: Vue.Ref<boolean> = ref(false)
+    /** Update when links to panels changed. */
+    readonly layoutTracker = new ReactiveTracker()
+    /** Drag in progress when `pointerId` is not null. */
+    readonly dragInfo: EdgeDragInfo = {
+        pointerId: null,
+        startPointerPos: 0,
+        startPos: 0,
+        minPos: 0,
+        maxPos: 0
+    }
 
     constructor(orientation: Orientation) {
         this.orientation = orientation
@@ -198,14 +221,133 @@ class Edge {
 
     AddPanel(panel: Panel, side: T.Direction) {
         this.children[Edge.IsPreceding(side) ? 0 : 1].set(panel.id, panel)
+        this.layoutTracker.Update()
     }
 
     RemovePanel(panel: Panel, side: T.Direction) {
         this.children[Edge.IsPreceding(side) ? 0 : 1].delete(panel.id)
+        this.layoutTracker.Update()
     }
 
     static IsPreceding(side: T.Direction) {
-        return side === T.Direction.LEFT || side === T.Direction.UP
+        return side === T.Direction.RIGHT || side === T.Direction.DOWN
+    }
+
+    get separatorStyle(): Vue.CSSProperties {
+        this.layoutTracker.Touch()
+        let minCoord: number | null = null
+        let maxCoord: number | null = null
+        for (const panel of this.children[0].values()) {
+            const coord = panel.rect.GetAxisCoord(this.orientation)
+            const size = panel.rect.GetAxisSize(this.orientation)
+            if (minCoord === null || coord < minCoord) {
+                minCoord = coord
+            }
+            if (maxCoord === null || coord + size > maxCoord) {
+                maxCoord = coord + size
+            }
+        }
+        const p = props.splitterDragZoneSize / 2
+        let style: Vue.CSSProperties
+        if (this.orientation === Orientation.HORIZONTAL) {
+            style = {
+                top: this.position - p + "px",
+                height: props.splitterDragZoneSize + "px",
+                left: minCoord + "px",
+                width: maxCoord! - minCoord! + "px"
+            }
+        } else {
+            style = {
+                left: this.position - p + "px",
+                width: props.splitterDragZoneSize + "px",
+                top: minCoord + "px",
+                height: maxCoord! - minCoord! + "px"
+            }
+        }
+        style.cursor = this.orientation === Orientation.HORIZONTAL ? "row-resize": "col-resize"
+        return style
+    }
+
+    StartDrag(e: PointerEvent): void {
+        this.dragInfo.pointerId = e.pointerId
+        this.dragInfo.startPointerPos = this.orientation === Orientation.HORIZONTAL ?
+            e.pageY : e.pageX
+        this.isActive.value = true
+        this.element!.setPointerCapture(e.pointerId)
+        this.dragInfo.startPos = this.position
+
+        let minPosition: number | null = null
+        let maxPosition: number | null = null
+        const oppOrientation = _OppositeOrientation(this.orientation)
+        for (const panel of this.children[0].values()) {
+            const pos = panel.rect.GetAxisCoord(oppOrientation) + panel.GetMinSize(oppOrientation)
+            /* Find maximal value. */
+            if (minPosition === null || pos > minPosition) {
+                minPosition = pos
+            }
+        }
+        for (const panel of this.children[1].values()) {
+            const pos = panel.rect.GetAxisCoord(oppOrientation) +
+                panel.rect.GetAxisSize(oppOrientation) - panel.GetMinSize(oppOrientation)
+            /* Find minimal value. */
+            if (maxPosition === null || pos > maxPosition) {
+                maxPosition = pos
+            }
+        }
+        this.dragInfo.minPos = minPosition! + props.panelsSpacing / 2
+        this.dragInfo.maxPos = maxPosition! - props.panelsSpacing / 2
+    }
+
+    EndDrag(): void {
+        if (this.dragInfo.pointerId === null) {
+            return
+        }
+        this.isActive.value = false
+        this.element!.releasePointerCapture(this.dragInfo.pointerId)
+        this.dragInfo.pointerId = null
+    }
+
+    OnPointerDown(e: PointerEvent): void {
+        if (e.altKey || e.shiftKey || e.ctrlKey) {
+            return
+        }
+        this.StartDrag(e)
+    }
+
+    OnPointerUp(e: PointerEvent): void {
+        if (e.pointerId !== this.dragInfo.pointerId) {
+            return
+        }
+        this.EndDrag()
+    }
+
+    OnPointerMove(e: PointerEvent): void {
+        if (e.pointerId !== this.dragInfo.pointerId) {
+            return
+        }
+        if (this.dragInfo.minPos >= this.dragInfo.maxPos) {
+            /* No place for adjustment. */
+            return
+        }
+        const dragDelta =
+            (this.orientation === Orientation.HORIZONTAL ? e.pageY : e.pageX) -
+            this.dragInfo.startPointerPos
+        let newPos = this.dragInfo.startPos + dragDelta
+        if (newPos < this.dragInfo.minPos) {
+            newPos = this.dragInfo.minPos
+        } else if (newPos > this.dragInfo.maxPos) {
+            newPos = this.dragInfo.maxPos
+        }
+        this.position = newPos
+        this.UpdateChildrenRect()
+    }
+
+    UpdateChildrenRect() {
+        for (let i = 0; i < 2; i++) {
+            for (const panel of this.children[i].values()) {
+                panel.UpdateRect()
+            }
+        }
     }
 }
 
@@ -362,6 +504,11 @@ class Panel {
         return prevEdge
     }
 
+    GetMinSize(orientation: Orientation): number {
+        //XXX may be dynamic, depend on tabs visibility and content
+        return props.minSplitterContentSize
+    }
+
     /**
      * @param splitPos Split position in pixels along split axis. Origin is the panel client
      *      rectangle origin.
@@ -482,11 +629,10 @@ class Panel {
 
                 this.EndGripDrag()
                 if (edge) {
-                    /* Ensure splitter separator element is created to set pointer capture on. */
-                    //XXX
-                    // nextTick(() => {
-                    //     this.parent!.StartDrag(e, newFirst ? this.childIndex - 1 : this.childIndex)
-                    // })
+                    /* Ensure edge element is created to set pointer capture on. */
+                    nextTick(() => {
+                        edge.StartDrag(e)
+                    })
                 }
                 return
             }
@@ -1144,19 +1290,14 @@ function _OrientationDirection(orientation: Orientation, positive: boolean): T.D
 
 /** @return Flattened list of all content panes. */
 function *_GetAllContent(): Generator<ContentPane, any, undefined> {
-    for (const panel of _GetAllPanels()) {
+    for (const panel of panels.values()) {
         yield* panel.children
     }
 }
 
-/** @return Flattened list of all panels. */
-function *_GetAllPanels(): Generator<Panel, any, undefined> {
-    yield *panels.values()
-}
-
-/** @return Flattened list of all empty panels. */
+/** @return List of all empty panels. */
 function *_GetAllEmptyPanels(): Generator<Panel> {
-    for (const panel of _GetAllPanels()) {
+    for (const panel of panels.values()) {
         if (panel.children.length === 0) {
             yield panel
         }

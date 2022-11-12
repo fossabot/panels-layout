@@ -24,7 +24,7 @@
             @pointermove="splitter.OnSeparatorPointerMove($event, index)" />
     </template> -->
 
-    <!-- <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
+    <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
         :style="panel.positionStyle">
         <div v-for="(grip, corner) in panel.grips" :key="corner"
             :ref="el => grip.element = el as HTMLElement"
@@ -32,15 +32,15 @@
             @pointerdown="panel.OnGripPointerDown($event, corner)"
             @pointerup="panel.OnGripPointerUp($event, corner)"
             @pointercancel="panel.OnGripPointerUp($event, corner)"
-            @pointermove="panel.OnGripPointerMove($event, corner)" > -->
+            @pointermove="panel.OnGripPointerMove($event, corner)" >
 
             <!-- XXX active needed? -->
-            <!-- <slot name="cornerGrip" :corner="corner" :active="grip.isActive">
+            <slot name="cornerGrip" :corner="corner" :active="grip.isActive">
                 <div class="cornerGripIcon" :class="{active: grip.isActive}"
                     :style="panel.GetCornerGripIconStyle(corner)" />
             </slot>
         </div>
-    </div> -->
+    </div>
 
     <!-- <template v-if="expandGhost !== null">
         <div class="expandGhostFrom" :style="expandGhost.expandInfo.fromRect.positionStyle">
@@ -68,7 +68,7 @@
 
 <script setup lang="ts">
 import type * as Vue from "vue"
-import { ref, reactive, onMounted, onBeforeUnmount, watch, nextTick } from "vue"
+import { ref, reactive, shallowReactive, onMounted, onBeforeUnmount, watch, nextTick } from "vue"
 import * as T from "./PublicTypes"
 
 
@@ -141,6 +141,10 @@ class Rect {
         this.height = height
     }
 
+    GetAxisCoord(orientation: Orientation): number {
+        return orientation === Orientation.HORIZONTAL ? this.x : this.y
+    }
+
     GetAxisSize(orientation: Orientation): number {
         return orientation === Orientation.HORIZONTAL ? this.width : this.height
     }
@@ -186,14 +190,65 @@ class Edge {
     /** First list is for panel having this edge left or top, second one for panels having this
      * edge right or bottom.
      */
-    readonly children: Panel[][] = [[], []]
+    readonly children: Map<Id, Panel>[] = [new Map(), new Map()]
 
+    constructor(orientation: Orientation) {
+        this.orientation = orientation
+    }
+
+    AddPanel(panel: Panel, side: T.Direction) {
+        this.children[Edge.IsPreceding(side) ? 0 : 1].set(panel.id, panel)
+    }
+
+    RemovePanel(panel: Panel, side: T.Direction) {
+        this.children[Edge.IsPreceding(side) ? 0 : 1].delete(panel.id)
+    }
+
+    static IsPreceding(side: T.Direction) {
+        return side === T.Direction.LEFT || side === T.Direction.UP
+    }
 }
 
 type ExpandGhostInfo = {
     /** True if is about to expand, false if is about to cancel. */
     isActive: boolean
     expandInfo: ExpandInfo
+}
+
+class CornerGrip {
+    element?: HTMLElement
+    readonly staticStyle: Vue.CSSProperties
+    //XXX is needed?
+    readonly isActive = ref(false)
+
+    constructor(staticStyle: Vue.CSSProperties) {
+        this.staticStyle = Object.assign({}, {
+            width: props.cornerGripSize + "px",
+            height: props.cornerGripSize + "px",
+            cursor: "crosshair"
+        }, staticStyle)
+    }
+}
+
+const enum GripDragState {
+    /** No decision about action to take. */
+    INITIAL,
+    /** Expand panel to the neighbor splitter. */
+    EXPAND,
+    /** Pointer moved back to the panel after expand intention. */
+    EXPAND_CANCELLED,
+    /* No state for panel splitting because this action is taken immediately and the drag state is
+     * transferred to a splitter.
+     */
+}
+
+type GripDragInfo = {
+    pointerId: any | null,
+    corner: T.Corner
+    /** Page CS. */
+    startPos: Vector
+    //XXX reactive?
+    state: GripDragState
 }
 
 class Panel {
@@ -203,17 +258,47 @@ class Panel {
     edgeTop: Edge | null = null
     edgeRight: Edge | null = null
     edgeBottom: Edge | null = null
-    readonly children: ContentPane[] = []
-
     /** Absolute position in layout container bounds. */
     rect = reactive(new Rect())
 
+    readonly children: ContentPane[] = []
+
+    readonly grips: {[corner in T.Corner]: CornerGrip}
+    readonly gripDragInfo: GripDragInfo = {
+        pointerId: null,
+        corner: T.Corner.TL,
+        startPos: {x: 0, y: 0},
+        state: GripDragState.INITIAL
+    }
+    expandTarget: Panel | null = null
+
+    constructor() {
+        this.grips = {
+            [T.Corner.TL]: new CornerGrip({
+                top: "0",
+                left: "0"
+            }),
+            [T.Corner.TR]: new CornerGrip({
+                top: "0",
+                right: "0"
+            }),
+            [T.Corner.BL]: new CornerGrip({
+                bottom: "0",
+                left: "0"
+            }),
+            [T.Corner.BR]: new CornerGrip({
+                bottom: "0",
+                right: "0"
+            })
+        }
+    }
+
     UpdateRect(): void {
         const p = props.panelsSpacing / 2
-        const x1 = this.edgeLeft ? this.edgeLeft.position + p : 0
-        const y1 = this.edgeTop ? this.edgeTop.position + p : 0
-        const x2 = this.edgeRight ? this.edgeRight.position - p : containerSize.width
-        const y2 = this.edgeBottom ? this.edgeBottom.position - p : containerSize.height
+        const x1 = Math.round(this.edgeLeft ? this.edgeLeft.position + p : 0)
+        const y1 = Math.round(this.edgeTop ? this.edgeTop.position + p : 0)
+        const x2 = Math.round(this.edgeRight ? this.edgeRight.position - p : containerSize.width)
+        const y2 = Math.round(this.edgeBottom ? this.edgeBottom.position - p : containerSize.height)
         this.rect.x = x1
         this.rect.y = y1
         this.rect.width = x2 - x1
@@ -233,6 +318,217 @@ class Panel {
     /** Reactive style attributes for absolute positioning inside the container. */
     get positionStyle() {
         return this.rect.positionStyle
+    }
+
+    get isEmpty() {
+        structureTracker.Touch()
+        return this.children.length == 0
+    }
+
+    GetEdge(side: T.Direction): Edge | null {
+        switch (side) {
+        case T.Direction.LEFT:
+            return this.edgeLeft
+        case T.Direction.RIGHT:
+            return this.edgeRight
+        case T.Direction.UP:
+            return this.edgeTop
+        case T.Direction.DOWN:
+            return this.edgeBottom
+        }
+    }
+
+    /** Bind the specified side to the specified edge (null for container edge).
+     * @return Previously bound edge.
+     */
+    BindEdge(edge: Edge | null, side: T.Direction): Edge | null {
+        const prevEdge = this.GetEdge(side)
+        prevEdge?.RemovePanel(this, side)
+        edge?.AddPanel(this, side)
+        switch (side) {
+        case T.Direction.LEFT:
+            this.edgeLeft = edge
+            break
+        case T.Direction.RIGHT:
+            this.edgeRight = edge
+            break
+        case T.Direction.UP:
+            this.edgeTop = edge
+            break
+        case T.Direction.DOWN:
+            this.edgeBottom = edge
+            break
+        }
+        return prevEdge
+    }
+
+    /**
+     * @param splitPos Split position in pixels along split axis. Origin is the panel client
+     *      rectangle origin.
+     * @param newFirst True if new panel precedes this one relative to split edge, false if it is
+     *      inserted next to this one.
+     * @return New edge if split successful, null if split not possible.
+     */
+    Split(orientation: Orientation, splitPos: number, newFirst: boolean): Edge | null {
+        const initialSize = this.rect.GetAxisSize(orientation)
+        if (initialSize < props.minSplitterContentSize * 2 + props.panelsSpacing) {
+            return null
+        }
+
+        const oppOrientation = _OppositeOrientation(orientation)
+        const edgeDir = _OrientationDirection(orientation, !newFirst)
+        const orthoDir = _OrientationDirection(oppOrientation, false)
+        const orthoDirOpp = _OppositeDirection(orthoDir)
+
+        const edge = new Edge(oppOrientation)
+        edges.set(edge.id, edge)
+        edge.position = this.rect.GetAxisCoord(orientation) + splitPos
+        const prevEdge = this.BindEdge(edge, edgeDir)
+
+        const panel = new Panel()
+        panels.set(panel.id, panel)
+        panel.BindEdge(prevEdge, edgeDir)
+        panel.BindEdge(edge, _OppositeDirection(edgeDir))
+        panel.BindEdge(this.GetEdge(orthoDir), orthoDir)
+        panel.BindEdge(this.GetEdge(orthoDirOpp), orthoDirOpp)
+
+        this.UpdateRect()
+        panel.UpdateRect()
+        return edge
+    }
+
+    GetCornerGripIconStyle(corner: T.Corner): Vue.StyleValue {
+        switch (corner) {
+        case T.Corner.TL:
+            return {}
+        case T.Corner.TR:
+            return {
+                right: "0",
+                transform: "scaleX(-1)"
+            }
+        case T.Corner.BL:
+            return {
+                bottom: "0",
+                transform: "scaleY(-1)"
+            }
+        case T.Corner.BR:
+            return {
+                bottom: "0",
+                right: "0",
+                transform: "scaleX(-1) scaleY(-1)"
+            }
+        }
+    }
+
+    OnGripPointerDown(e: PointerEvent, corner: T.Corner): void {
+        if (e.altKey || e.shiftKey || e.ctrlKey) {
+            return
+        }
+        this.gripDragInfo.pointerId = e.pointerId
+        this.gripDragInfo.corner = corner
+        this.gripDragInfo.startPos.x = e.pageX
+        this.gripDragInfo.startPos.y = e.pageY
+        const grip = this.grips[corner]
+        grip.isActive.value = true
+        grip.element!.setPointerCapture(e.pointerId)
+    }
+
+    EndGripDrag() {
+        if (this.gripDragInfo.pointerId === null) {
+            return
+        }
+        const grip = this.grips[this.gripDragInfo.corner]
+        grip.isActive.value = false
+        grip.element!.releasePointerCapture(this.gripDragInfo.pointerId)
+        this.gripDragInfo.pointerId = null
+        this.gripDragInfo.state = GripDragState.INITIAL
+        this.expandTarget = null
+        expandGhost.value = null
+    }
+
+    OnGripPointerUp(e: PointerEvent, corner: T.Corner): void {
+        if (e.pointerId !== this.gripDragInfo.pointerId) {
+            return
+        }
+        if (this.gripDragInfo.state === GripDragState.EXPAND) {
+            //XXX
+            // this.Expand(this.expandTarget!)
+        }
+        this.EndGripDrag()
+    }
+
+    OnGripPointerMove(e: PointerEvent, corner: T.Corner): void {
+        if (e.pointerId !== this.gripDragInfo.pointerId) {
+            return
+        }
+
+        const dir = _GetCornerOrientation(corner)
+        const d = {x: (e.pageX - this.gripDragInfo.startPos.x) * dir.x,
+                   y: (e.pageY - this.gripDragInfo.startPos.y) * dir.y}
+        const clientCoord = this.PageToClientCoord(e.pageX, e.pageY)
+        const lytCoords = _PageToLayoutCoord(e.pageX, e.pageY)
+
+        if (this.gripDragInfo.state === GripDragState.INITIAL) {
+            if (d.x >= 0 && d.y >= 0 &&
+                (d.x >= props.panelInwardDragThreshold || d.y >= props.panelInwardDragThreshold) &&
+                Math.abs(d.x - d.y) > props.panelSplitDragDifferenceThreshold) {
+
+                const newFirst = d.x > d.y ? dir.x > 0 : dir.y > 0
+                //XXX
+                const edge = this.Split(
+                    d.x > d.y ? Orientation.HORIZONTAL : Orientation.VERTICAL,
+                    d.x > d.y ? clientCoord.x : clientCoord.y,
+                    newFirst)
+
+                this.EndGripDrag()
+                if (edge) {
+                    /* Ensure splitter separator element is created to set pointer capture on. */
+                    //XXX
+                    // nextTick(() => {
+                    //     this.parent!.StartDrag(e, newFirst ? this.childIndex - 1 : this.childIndex)
+                    // })
+                }
+                return
+            }
+
+            // if ((d.x < 0 || d.y < 0) &&
+            //     (d.x <= -props.panelOutwardDragThreshold || d.y <= -props.panelOutwardDragThreshold)) {
+
+            //     const target = root.HitTestPanel(lytCoords.x, lytCoords.y)
+            //     if (!target) {
+            //         return
+            //     }
+            //     const expandInfo = _CalculateExpandInfo(this.rect, target.rect)
+            //     if (!expandInfo) {
+            //         return
+            //     }
+            //     expandGhost.value = {
+            //         isActive: true,
+            //         expandInfo
+            //     }
+            //     this.expandTarget = target
+            //     this.gripDragInfo.state = GripDragState.EXPAND
+            //     return
+            // }
+
+            return
+        }
+
+        if (this.gripDragInfo.state === GripDragState.EXPAND) {
+            if (!this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
+                this.gripDragInfo.state = GripDragState.EXPAND_CANCELLED
+                expandGhost.value!.isActive = false
+            }
+            return
+        }
+
+        if (this.gripDragInfo.state === GripDragState.EXPAND_CANCELLED) {
+            if (this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
+                this.gripDragInfo.state = GripDragState.EXPAND
+                expandGhost.value!.isActive = true
+            }
+            return
+        }
     }
 }
 
@@ -486,42 +782,6 @@ class SplitterSeparator {
 //         return null
 //     }
 // }
-
-class CornerGrip {
-    element?: HTMLElement
-    readonly staticStyle: Vue.CSSProperties
-    //XXX is needed?
-    readonly isActive = ref(false)
-
-    constructor(staticStyle: Vue.CSSProperties) {
-        this.staticStyle = Object.assign({}, {
-            width: props.cornerGripSize + "px",
-            height: props.cornerGripSize + "px",
-            cursor: "crosshair"
-        }, staticStyle)
-    }
-}
-
-const enum GripDragState {
-    /** No decision about action to take. */
-    INITIAL,
-    /** Expand panel to the neighbor splitter. */
-    EXPAND,
-    /** Pointer moved back to the panel after expand intention. */
-    EXPAND_CANCELLED,
-    /* No state for panel splitting because this action is taken immediately and the drag state is
-     * transferred to a splitter.
-     */
-}
-
-type GripDragInfo = {
-    pointerId: any | null,
-    corner: T.Corner
-    /** Page CS. */
-    startPos: Vector
-    //XXX reactive?
-    state: GripDragState
-}
 
 /** Represents particular panel. Panel may have none (if empty), one or several (if tabbed) content
  * components. Panel parent is either splitter or null if root panel.
@@ -828,8 +1088,8 @@ class ReactiveTracker {
 // /////////////////////////////////////////////////////////////////////////////////////////////////
 // Private state and methods
 
-const panels: Map<Id, Panel> = reactive(new Map())
-const edges: Map<Id, Edge> = reactive(new Map())
+const panels: Map<Id, Panel> = shallowReactive(new Map())
+const edges: Map<Id, Edge> = shallowReactive(new Map())
 const container: Vue.Ref<HTMLDivElement | null> = ref(null)
 const resizeObserver = new ResizeObserver(_OnContainerResize)
 /** Tracks all changes in content hierarchy. */
@@ -858,6 +1118,28 @@ function _GetCornerOrientation(corner: T.Corner): Vector {
 
 function _OppositeOrientation(orientation: Orientation): Orientation {
     return orientation === Orientation.HORIZONTAL ? Orientation.VERTICAL : Orientation.HORIZONTAL
+}
+
+function _OppositeDirection(dir: T.Direction): T.Direction {
+    switch (dir) {
+    case T.Direction.LEFT:
+        return T.Direction.RIGHT
+    case T.Direction.RIGHT:
+        return T.Direction.LEFT
+    case T.Direction.UP:
+        return T.Direction.DOWN
+    case T.Direction.DOWN:
+        return T.Direction.UP
+    }
+}
+
+
+function _OrientationDirection(orientation: Orientation, positive: boolean): T.Direction {
+    if (orientation === Orientation.HORIZONTAL) {
+        return positive ? T.Direction.RIGHT : T.Direction.LEFT
+    } else {
+        return positive ? T.Direction.DOWN : T.Direction.UP
+    }
 }
 
 /** @return Flattened list of all content panes. */

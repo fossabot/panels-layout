@@ -14,7 +14,7 @@
         </slot>
     </div>
 
-    <template v-for="splitter in _GetAllSplitters()" :key="splitter.id">
+    <!-- <template v-for="splitter in _GetAllSplitters()" :key="splitter.id">
         <div v-for="(sep, index) in splitter.separators" :key="index" class="separator"
             :ref="el => sep.element = el as HTMLElement"
             :style="splitter.GetSeparatorStyle(index)"
@@ -22,9 +22,9 @@
             @pointerup="splitter.OnSeparatorPointerUp($event, index)"
             @pointercancel="splitter.OnSeparatorPointerUp($event, index)"
             @pointermove="splitter.OnSeparatorPointerMove($event, index)" />
-    </template>
+    </template> -->
 
-    <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
+    <!-- <div v-for="panel in _GetAllPanels()" :key="panel.id" class="panel"
         :style="panel.positionStyle">
         <div v-for="(grip, corner) in panel.grips" :key="corner"
             :ref="el => grip.element = el as HTMLElement"
@@ -32,17 +32,17 @@
             @pointerdown="panel.OnGripPointerDown($event, corner)"
             @pointerup="panel.OnGripPointerUp($event, corner)"
             @pointercancel="panel.OnGripPointerUp($event, corner)"
-            @pointermove="panel.OnGripPointerMove($event, corner)" >
+            @pointermove="panel.OnGripPointerMove($event, corner)" > -->
 
             <!-- XXX active needed? -->
-            <slot name="cornerGrip" :corner="corner" :active="grip.isActive">
+            <!-- <slot name="cornerGrip" :corner="corner" :active="grip.isActive">
                 <div class="cornerGripIcon" :class="{active: grip.isActive}"
                     :style="panel.GetCornerGripIconStyle(corner)" />
             </slot>
         </div>
-    </div>
+    </div> -->
 
-    <template v-if="expandGhost !== null">
+    <!-- <template v-if="expandGhost !== null">
         <div class="expandGhostFrom" :style="expandGhost.expandInfo.fromRect.positionStyle">
             <slot name="expandGhostFrom" :isActive="expandGhost.isActive"
                 :dir="expandGhost.expandInfo.dir">
@@ -61,7 +61,7 @@
                 <div class="default" :class="{active: expandGhost.isActive}" />
             </slot>
         </div>
-    </template>
+    </template> -->
 
 </div>
 </template>
@@ -76,8 +76,8 @@ const props = withDefaults(defineProps<{
     contentDescriptorProvider: T.ContentDescriptorProvider,
     /** Minimal size in pixels for splitter child content. */
     minSplitterContentSize?: number,
-    /** Spacing in pixels between splitter children. */
-    splitterSpacing?: number,
+    /** Spacing in pixels between adjacent panels. */
+    panelsSpacing?: number,
     /** Size of corner grip zone for dragging. */
     cornerGripSize?: number,
     /** Minimal drag distance in pixels before panel splitting. */
@@ -95,7 +95,7 @@ const props = withDefaults(defineProps<{
 
 }>(), {
     minSplitterContentSize: 30,
-    splitterSpacing: 4,
+    panelsSpacing: 4,
     cornerGripSize: 14,
     panelInwardDragThreshold: 16,
     panelSplitDragDifferenceThreshold: 12,
@@ -118,7 +118,7 @@ function SetLayout(layoutDesc: T.LayoutDescriptor): void {
 
 type Id = string
 
-enum SplitterOrientation {
+enum Orientation {
     VERTICAL,
     HORIZONTAL
 }
@@ -141,8 +141,8 @@ class Rect {
         this.height = height
     }
 
-    GetAxisSize(orientation: SplitterOrientation): number {
-        return orientation === SplitterOrientation.HORIZONTAL ? this.width : this.height
+    GetAxisSize(orientation: Orientation): number {
+        return orientation === Orientation.HORIZONTAL ? this.width : this.height
     }
 
     get positionStyle() {
@@ -178,43 +178,46 @@ class Rect {
     }
 }
 
+/** Moveable edge. Panels may have some of their edges bound to one such. */
+class Edge {
+    readonly id: Id = _GenerateId()
+    readonly orientation: Orientation
+    position: number
+    /** First list is for panel having this edge left or top, second one for panels having this
+     * edge right or bottom.
+     */
+    readonly children: Panel[][] = [[], []]
+
+}
+
 type ExpandGhostInfo = {
     /** True if is about to expand, false if is about to cancel. */
     isActive: boolean
     expandInfo: ExpandInfo
 }
 
-abstract class PanelBase {
+class Panel {
     readonly id: Id = _GenerateId()
-    parent: Splitter | null
-    childIndex: number
+    /** It is either bound to some edge or to container corresponding edge if null. */
+    edgeLeft: Edge | null = null
+    edgeTop: Edge | null = null
+    edgeRight: Edge | null = null
+    edgeBottom: Edge | null = null
+    readonly children: ContentPane[] = []
+
     /** Absolute position in layout container bounds. */
     rect = reactive(new Rect())
 
     UpdateRect(): void {
-        if (this.parent) {
-            let pos = this.childIndex * props.splitterSpacing
-            for (let i = 0; i < this.childIndex; i++) {
-                pos += this.parent.childrenPixelSize[i]
-            }
-            if (this.parent.orientation == SplitterOrientation.HORIZONTAL) {
-                this.rect.x = this.parent.rect.x + pos
-                this.rect.y = this.parent.rect.y
-                this.rect.width = this.parent.childrenPixelSize[this.childIndex]
-                this.rect.height = this.parent.rect.height
-            } else {
-                this.rect.x = this.parent.rect.x
-                this.rect.y = this.parent.rect.y + pos
-                this.rect.width = this.parent.rect.width
-                this.rect.height = this.parent.childrenPixelSize[this.childIndex]
-            }
-
-        } else {
-            this.rect.x = 0
-            this.rect.y = 0
-            this.rect.width = containerSize.width
-            this.rect.height = containerSize.height
-        }
+        const p = props.panelsSpacing / 2
+        const x1 = this.edgeLeft ? this.edgeLeft.position + p : 0
+        const y1 = this.edgeTop ? this.edgeTop.position + p : 0
+        const x2 = this.edgeRight ? this.edgeRight.position - p : containerSize.width
+        const y2 = this.edgeBottom ? this.edgeBottom.position - p : containerSize.height
+        this.rect.x = x1
+        this.rect.y = y1
+        this.rect.width = x2 - x1
+        this.rect.height = y2 - y1
     }
 
     PageToClientCoord(x: number, y: number): Vector {
@@ -225,7 +228,7 @@ abstract class PanelBase {
     }
 
     /** Get panel if any under the specified layout coordinates. */
-    abstract HitTestPanel(x: number, y: number): Panel | null
+    // abstract HitTestPanel(x: number, y: number): Panel | null
 
     /** Reactive style attributes for absolute positioning inside the container. */
     get positionStyle() {
@@ -255,234 +258,234 @@ class SplitterSeparator {
 /** Manages either vertically or horizontally split panels. Whole the split layout is formed by
  * hierarchy of these components.
  */
-class Splitter extends PanelBase {
-    readonly orientation: SplitterOrientation
-    /** Always has at least two children. */
-    readonly children: (Splitter | Panel)[]
-    /** May be fractional, recalculated and snapped to pixels in UpdateRect() */
-    readonly childrenSize: number[] = []
-    readonly childrenPixelSize: number[] = []
-    /** Drag in progress when `pointerId` is not null. */
-    readonly dragInfo: SplitterDragInfo = {
-        pointerId: null,
-        index: 0,
-        startPointerPos: 0,
-        sizeSum: 0,
-        startSize: 0,
-        pixRatio: 0
-    }
-    readonly separators: SplitterSeparator[] = []
-    readonly layoutTracker = new ReactiveTracker()
+// class Splitter extends PanelBase {
+//     readonly orientation: SplitterOrientation
+//     /** Always has at least two children. */
+//     readonly children: (Splitter | Panel)[]
+//     /** May be fractional, recalculated and snapped to pixels in UpdateRect() */
+//     readonly childrenSize: number[] = []
+//     readonly childrenPixelSize: number[] = []
+//     /** Drag in progress when `pointerId` is not null. */
+//     readonly dragInfo: SplitterDragInfo = {
+//         pointerId: null,
+//         index: 0,
+//         startPointerPos: 0,
+//         sizeSum: 0,
+//         startSize: 0,
+//         pixRatio: 0
+//     }
+//     readonly separators: SplitterSeparator[] = []
+//     readonly layoutTracker = new ReactiveTracker()
 
-    constructor(orientation: SplitterOrientation, children: (Splitter | Panel)[],
-                childrenSize?: number[]) {
-        super()
-        this.orientation = orientation
-        if (children.length < 2) {
-            throw new Error("Splitter must have at least two children")
-        }
-        this.children = children
+//     constructor(orientation: SplitterOrientation, children: (Splitter | Panel)[],
+//                 childrenSize?: number[]) {
+//         super()
+//         this.orientation = orientation
+//         if (children.length < 2) {
+//             throw new Error("Splitter must have at least two children")
+//         }
+//         this.children = children
 
-        if (childrenSize) {
-            if (childrenSize.length != children.length) {
-                throw new Error("`childrenSize` length should be equal to `children` length")
-            }
-            this.childrenSize = childrenSize
-        } else {
-            for (let i = 0; i < children.length; i++) {
-                this.childrenSize.push(props.minSplitterContentSize)
-            }
-        }
+//         if (childrenSize) {
+//             if (childrenSize.length != children.length) {
+//                 throw new Error("`childrenSize` length should be equal to `children` length")
+//             }
+//             this.childrenSize = childrenSize
+//         } else {
+//             for (let i = 0; i < children.length; i++) {
+//                 this.childrenSize.push(props.minSplitterContentSize)
+//             }
+//         }
 
-        for (let i = 0; i < children.length; i++) {
-            const c = children[i]
-            c.parent = this
-            c.childIndex = i
-            if (i != 0) {
-                this.separators.push(new SplitterSeparator())
-            }
-        }
-    }
+//         for (let i = 0; i < children.length; i++) {
+//             const c = children[i]
+//             c.parent = this
+//             c.childIndex = i
+//             if (i != 0) {
+//                 this.separators.push(new SplitterSeparator())
+//             }
+//         }
+//     }
 
-    UpdateRect(): void {
-        super.UpdateRect()
-        this._CalculateChildrenPixelSize()
-        for (const child of this.children) {
-            child.UpdateRect()
-        }
-    }
+//     UpdateRect(): void {
+//         super.UpdateRect()
+//         this._CalculateChildrenPixelSize()
+//         for (const child of this.children) {
+//             child.UpdateRect()
+//         }
+//     }
 
-    GetSeparatorStyle(index: number): Vue.CSSProperties {
-        this.layoutTracker.Touch()
+//     GetSeparatorStyle(index: number): Vue.CSSProperties {
+//         this.layoutTracker.Touch()
 
-        let pos = props.splitterSpacing * index
-        for (let i = 0; i <= index; i++) {
-            pos += this.childrenPixelSize[i]
-        }
-        pos -= (props.splitterDragZoneSize - props.splitterSpacing) / 2
+//         let pos = props.splitterSpacing * index
+//         for (let i = 0; i <= index; i++) {
+//             pos += this.childrenPixelSize[i]
+//         }
+//         pos -= (props.splitterDragZoneSize - props.splitterSpacing) / 2
 
-        let style: Vue.CSSProperties
-        if (this.orientation === SplitterOrientation.HORIZONTAL) {
-            style = {
-                top: this.rect.y + "px",
-                height: this.rect.height + "px",
-                left: this.rect.x + pos + "px",
-                width: props.splitterDragZoneSize + "px"
-            }
-        } else {
-            style = {
-                left: this.rect.x + "px",
-                width: this.rect.width + "px",
-                top: this.rect.y + pos + "px",
-                height: props.splitterDragZoneSize + "px"
-            }
-        }
-        style.cursor = this.orientation === SplitterOrientation.HORIZONTAL ?
-            "col-resize" : "row-resize"
-        return style
-    }
+//         let style: Vue.CSSProperties
+//         if (this.orientation === SplitterOrientation.HORIZONTAL) {
+//             style = {
+//                 top: this.rect.y + "px",
+//                 height: this.rect.height + "px",
+//                 left: this.rect.x + pos + "px",
+//                 width: props.splitterDragZoneSize + "px"
+//             }
+//         } else {
+//             style = {
+//                 left: this.rect.x + "px",
+//                 width: this.rect.width + "px",
+//                 top: this.rect.y + pos + "px",
+//                 height: props.splitterDragZoneSize + "px"
+//             }
+//         }
+//         style.cursor = this.orientation === SplitterOrientation.HORIZONTAL ?
+//             "col-resize" : "row-resize"
+//         return style
+//     }
 
-    /** Distribute available space between all children proportionally to current children size data
-     * snapping to integer pixels.
-     */
-    _CalculateChildrenPixelSize() {
-        let totalSize = 0
-        const numChildren = this.childrenSize.length
-        this.childrenPixelSize.length = numChildren
-        for (let i = 0; i < numChildren; i++) {
-            totalSize += this.childrenSize[i]
-        }
-        const allocatableSize = this.rect.GetAxisSize(this.orientation) -
-            (this.children.length - 1) * props.splitterSpacing
-        const sizeRatio = allocatableSize / totalSize
+//     /** Distribute available space between all children proportionally to current children size data
+//      * snapping to integer pixels.
+//      */
+//     _CalculateChildrenPixelSize() {
+//         let totalSize = 0
+//         const numChildren = this.childrenSize.length
+//         this.childrenPixelSize.length = numChildren
+//         for (let i = 0; i < numChildren; i++) {
+//             totalSize += this.childrenSize[i]
+//         }
+//         const allocatableSize = this.rect.GetAxisSize(this.orientation) -
+//             (this.children.length - 1) * props.splitterSpacing
+//         const sizeRatio = allocatableSize / totalSize
 
-        let curPos = 0
-        totalSize = 0
-        for (let i = 0; i < numChildren; i++) {
-            totalSize += this.childrenSize[i]
-            const newPos = Math.round(totalSize * sizeRatio)
-            this.childrenPixelSize[i] = newPos - curPos
-            curPos = newPos
-        }
-        this.layoutTracker.Update()
-    }
+//         let curPos = 0
+//         totalSize = 0
+//         for (let i = 0; i < numChildren; i++) {
+//             totalSize += this.childrenSize[i]
+//             const newPos = Math.round(totalSize * sizeRatio)
+//             this.childrenPixelSize[i] = newPos - curPos
+//             curPos = newPos
+//         }
+//         this.layoutTracker.Update()
+//     }
 
-    StartDrag(e: PointerEvent, index: number): void {
-        this.dragInfo.pointerId = e.pointerId
-        this.dragInfo.index = index
-        this.dragInfo.startPointerPos = this.orientation === SplitterOrientation.HORIZONTAL ?
-            e.pageX : e.pageY
-        const sep = this.separators[index]
-        sep.isActive.value = true
-        sep.element!.setPointerCapture(e.pointerId)
+//     StartDrag(e: PointerEvent, index: number): void {
+//         this.dragInfo.pointerId = e.pointerId
+//         this.dragInfo.index = index
+//         this.dragInfo.startPointerPos = this.orientation === SplitterOrientation.HORIZONTAL ?
+//             e.pageX : e.pageY
+//         const sep = this.separators[index]
+//         sep.isActive.value = true
+//         sep.element!.setPointerCapture(e.pointerId)
 
-        this.dragInfo.sizeSum = this.childrenSize[index] + this.childrenSize[index + 1]
-        this.dragInfo.startSize = this.childrenSize[index]
-        const pixSum = this.childrenPixelSize[index] + this.childrenPixelSize[index + 1]
-        this.dragInfo.pixRatio = pixSum / this.dragInfo.sizeSum
-    }
+//         this.dragInfo.sizeSum = this.childrenSize[index] + this.childrenSize[index + 1]
+//         this.dragInfo.startSize = this.childrenSize[index]
+//         const pixSum = this.childrenPixelSize[index] + this.childrenPixelSize[index + 1]
+//         this.dragInfo.pixRatio = pixSum / this.dragInfo.sizeSum
+//     }
 
-    EndDrag(): void {
-        if (this.dragInfo.pointerId === null) {
-            return
-        }
-        const sep = this.separators[this.dragInfo.index]
-        sep.isActive.value = false
-        sep.element!.releasePointerCapture(this.dragInfo.pointerId)
-        this.dragInfo.pointerId = null
-    }
+//     EndDrag(): void {
+//         if (this.dragInfo.pointerId === null) {
+//             return
+//         }
+//         const sep = this.separators[this.dragInfo.index]
+//         sep.isActive.value = false
+//         sep.element!.releasePointerCapture(this.dragInfo.pointerId)
+//         this.dragInfo.pointerId = null
+//     }
 
-    OnSeparatorPointerDown(e: PointerEvent, index: number): void {
-        if (e.altKey || e.shiftKey || e.ctrlKey) {
-            return
-        }
-        this.StartDrag(e, index)
-    }
+//     OnSeparatorPointerDown(e: PointerEvent, index: number): void {
+//         if (e.altKey || e.shiftKey || e.ctrlKey) {
+//             return
+//         }
+//         this.StartDrag(e, index)
+//     }
 
-    OnSeparatorPointerUp(e: PointerEvent, index: number): void {
-        if (e.pointerId !== this.dragInfo.pointerId) {
-            return
-        }
-        this.EndDrag()
-    }
+//     OnSeparatorPointerUp(e: PointerEvent, index: number): void {
+//         if (e.pointerId !== this.dragInfo.pointerId) {
+//             return
+//         }
+//         this.EndDrag()
+//     }
 
-    OnSeparatorPointerMove(e: PointerEvent, index: number): void {
-        if (e.pointerId !== this.dragInfo.pointerId) {
-            return
-        }
-        const minSize = props.minSplitterContentSize / this.dragInfo.pixRatio
-        const maxSize = this.dragInfo.sizeSum - minSize
-        if (minSize >= maxSize) {
-            /* No place for adjustment. */
-            return
-        }
-        const dragDelta =
-            (this.orientation === SplitterOrientation.HORIZONTAL ? e.pageX : e.pageY) -
-            this.dragInfo.startPointerPos
-        let newSize = this.dragInfo.startSize + dragDelta / this.dragInfo.pixRatio
-        if (newSize < minSize) {
-            newSize = minSize
-        } else if (newSize > maxSize) {
-            newSize = maxSize
-        }
-        this.childrenSize[index] = newSize
-        this.childrenSize[index + 1] = this.dragInfo.sizeSum - newSize
-        this.UpdateRect()
-    }
+//     OnSeparatorPointerMove(e: PointerEvent, index: number): void {
+//         if (e.pointerId !== this.dragInfo.pointerId) {
+//             return
+//         }
+//         const minSize = props.minSplitterContentSize / this.dragInfo.pixRatio
+//         const maxSize = this.dragInfo.sizeSum - minSize
+//         if (minSize >= maxSize) {
+//             /* No place for adjustment. */
+//             return
+//         }
+//         const dragDelta =
+//             (this.orientation === SplitterOrientation.HORIZONTAL ? e.pageX : e.pageY) -
+//             this.dragInfo.startPointerPos
+//         let newSize = this.dragInfo.startSize + dragDelta / this.dragInfo.pixRatio
+//         if (newSize < minSize) {
+//             newSize = minSize
+//         } else if (newSize > maxSize) {
+//             newSize = maxSize
+//         }
+//         this.childrenSize[index] = newSize
+//         this.childrenSize[index + 1] = this.dragInfo.sizeSum - newSize
+//         this.UpdateRect()
+//     }
 
-    InsertChild(child: Panel | Splitter, index: number, size: number): void {
-        this.children.splice(index, 0, child)
-        this.childrenSize.splice(index, 0, size)
-        this.separators.splice(index, 0, new SplitterSeparator())
-        for (let i = index; i < this.children.length; i++) {
-            this.children[i].childIndex = i
-        }
-        child.parent = this
-        this.UpdateRect()
-        structureTracker.Update()
-    }
+//     InsertChild(child: Panel | Splitter, index: number, size: number): void {
+//         this.children.splice(index, 0, child)
+//         this.childrenSize.splice(index, 0, size)
+//         this.separators.splice(index, 0, new SplitterSeparator())
+//         for (let i = index; i < this.children.length; i++) {
+//             this.children[i].childIndex = i
+//         }
+//         child.parent = this
+//         this.UpdateRect()
+//         structureTracker.Update()
+//     }
 
-    /** Replace current child at the specified index. */
-    SetChild(child: Panel | Splitter, index: number): void {
-        this.children[index] = child
-        child.parent = this
-        child.childIndex = index
-        child.UpdateRect()
-        structureTracker.Update()
-    }
+//     /** Replace current child at the specified index. */
+//     SetChild(child: Panel | Splitter, index: number): void {
+//         this.children[index] = child
+//         child.parent = this
+//         child.childIndex = index
+//         child.UpdateRect()
+//         structureTracker.Update()
+//     }
 
-    /** Remove the specified child. At least two children should be left. */
-    RemoveChild(index: number) {
-        if (this.children.length === 2) {
-            throw new Error("Cannot remove last two children")
-        }
-        this.children.splice(index, 1)
-        this.childrenSize.splice(index, 1)
-        for (let i = index; i < this.children.length; i++) {
-            this.children[i].childIndex = i
-        }
-        this.UpdateRect()
-        structureTracker.Update()
-    }
+//     /** Remove the specified child. At least two children should be left. */
+//     RemoveChild(index: number) {
+//         if (this.children.length === 2) {
+//             throw new Error("Cannot remove last two children")
+//         }
+//         this.children.splice(index, 1)
+//         this.childrenSize.splice(index, 1)
+//         for (let i = index; i < this.children.length; i++) {
+//             this.children[i].childIndex = i
+//         }
+//         this.UpdateRect()
+//         structureTracker.Update()
+//     }
 
-    HitTestPanel(x: number, y: number): Panel | null {
-        if (x < this.rect.x || x >= this.rect.x + this.rect.width ||
-            y < this.rect.y || y >= this.rect.y + this.rect.height) {
-            return null
-        }
-        const pos = this.orientation === SplitterOrientation.HORIZONTAL ?
-            x - this.rect.x : y - this.rect.y
-        let curPos = 0
-        for (let i = 0; i < this.childrenPixelSize.length; i++) {
-            const size = this.childrenPixelSize[i]
-            if (pos >= curPos && pos < curPos + size) {
-                return this.children[i].HitTestPanel(x, y)
-            }
-            curPos += size + props.splitterSpacing
-        }
-        return null
-    }
-}
+//     HitTestPanel(x: number, y: number): Panel | null {
+//         if (x < this.rect.x || x >= this.rect.x + this.rect.width ||
+//             y < this.rect.y || y >= this.rect.y + this.rect.height) {
+//             return null
+//         }
+//         const pos = this.orientation === SplitterOrientation.HORIZONTAL ?
+//             x - this.rect.x : y - this.rect.y
+//         let curPos = 0
+//         for (let i = 0; i < this.childrenPixelSize.length; i++) {
+//             const size = this.childrenPixelSize[i]
+//             if (pos >= curPos && pos < curPos + size) {
+//                 return this.children[i].HitTestPanel(x, y)
+//             }
+//             curPos += size + props.splitterSpacing
+//         }
+//         return null
+//     }
+// }
 
 class CornerGrip {
     element?: HTMLElement
@@ -523,254 +526,254 @@ type GripDragInfo = {
 /** Represents particular panel. Panel may have none (if empty), one or several (if tabbed) content
  * components. Panel parent is either splitter or null if root panel.
  */
-class Panel extends PanelBase {
-    readonly children: ContentPane[] = []
-    readonly grips: {[corner in T.Corner]: CornerGrip}
+// class OldPanel extends PanelBase {
 
-    readonly gripDragInfo: GripDragInfo = {
-        pointerId: null,
-        corner: T.Corner.TL,
-        startPos: {x: 0, y: 0},
-        state: GripDragState.INITIAL
-    }
+//     readonly grips: {[corner in T.Corner]: CornerGrip}
 
-    expandTarget: Panel | null = null
+//     readonly gripDragInfo: GripDragInfo = {
+//         pointerId: null,
+//         corner: T.Corner.TL,
+//         startPos: {x: 0, y: 0},
+//         state: GripDragState.INITIAL
+//     }
+
+//     expandTarget: Panel | null = null
 
 
-    constructor() {
-        super()
-        this.grips = {
-            [T.Corner.TL]: new CornerGrip({
-                top: "0",
-                left: "0"
-            }),
-            [T.Corner.TR]: new CornerGrip({
-                top: "0",
-                right: "0"
-            }),
-            [T.Corner.BL]: new CornerGrip({
-                bottom: "0",
-                left: "0"
-            }),
-            [T.Corner.BR]: new CornerGrip({
-                bottom: "0",
-                right: "0"
-            })
-        }
-    }
+//     constructor() {
+//         super()
+//         this.grips = {
+//             [T.Corner.TL]: new CornerGrip({
+//                 top: "0",
+//                 left: "0"
+//             }),
+//             [T.Corner.TR]: new CornerGrip({
+//                 top: "0",
+//                 right: "0"
+//             }),
+//             [T.Corner.BL]: new CornerGrip({
+//                 bottom: "0",
+//                 left: "0"
+//             }),
+//             [T.Corner.BR]: new CornerGrip({
+//                 bottom: "0",
+//                 right: "0"
+//             })
+//         }
+//     }
 
-    get isEmpty() {
-        structureTracker.Touch()
-        return this.children.length == 0
-    }
+//     get isEmpty() {
+//         structureTracker.Touch()
+//         return this.children.length == 0
+//     }
 
-    GetCornerGripIconStyle(corner: T.Corner): Vue.StyleValue {
-        switch (corner) {
-        case T.Corner.TL:
-            return {}
-        case T.Corner.TR:
-            return {
-                right: "0",
-                transform: "scaleX(-1)"
-            }
-        case T.Corner.BL:
-            return {
-                bottom: "0",
-                transform: "scaleY(-1)"
-            }
-        case T.Corner.BR:
-            return {
-                bottom: "0",
-                right: "0",
-                transform: "scaleX(-1) scaleY(-1)"
-            }
-        }
-    }
+//     GetCornerGripIconStyle(corner: T.Corner): Vue.StyleValue {
+//         switch (corner) {
+//         case T.Corner.TL:
+//             return {}
+//         case T.Corner.TR:
+//             return {
+//                 right: "0",
+//                 transform: "scaleX(-1)"
+//             }
+//         case T.Corner.BL:
+//             return {
+//                 bottom: "0",
+//                 transform: "scaleY(-1)"
+//             }
+//         case T.Corner.BR:
+//             return {
+//                 bottom: "0",
+//                 right: "0",
+//                 transform: "scaleX(-1) scaleY(-1)"
+//             }
+//         }
+//     }
 
-    /**
-     * @param splitPos Split position in pixels along split axis. Origin is the panel client
-     *      rectangle origin.
-     * @param newFirst True if new panel precedes this one in a splitter, false if it is inserted
-     *      next to this one.
-     * @return True if split successful, false if split not possible.
-     */
-    Split(orientation: SplitterOrientation, splitPos: number, newFirst: boolean): boolean {
-        const initialPixelSize = this.rect.GetAxisSize(orientation)
-        if (initialPixelSize < props.minSplitterContentSize * 2 + props.splitterSpacing) {
-            return false
-        }
-        const parent = this.parent
-        const panel = new Panel()
-        const size1 = splitPos - props.splitterSpacing / 2
-        const size2 = initialPixelSize - props.splitterSpacing - size1
-        if (parent && parent.orientation === orientation) {
-            /* Insert new sibling in parent splitter. */
-            const pixelRatio = initialPixelSize / parent.childrenSize[this.childIndex]
-            parent.childrenSize[this.childIndex] = (newFirst ? size2 : size1) / pixelRatio
-            parent.InsertChild(panel, newFirst ? this.childIndex : this.childIndex + 1,
-                (newFirst ? size1 : size2) / pixelRatio)
+//     /**
+//      * @param splitPos Split position in pixels along split axis. Origin is the panel client
+//      *      rectangle origin.
+//      * @param newFirst True if new panel precedes this one in a splitter, false if it is inserted
+//      *      next to this one.
+//      * @return True if split successful, false if split not possible.
+//      */
+//     Split(orientation: SplitterOrientation, splitPos: number, newFirst: boolean): boolean {
+//         const initialPixelSize = this.rect.GetAxisSize(orientation)
+//         if (initialPixelSize < props.minSplitterContentSize * 2 + props.splitterSpacing) {
+//             return false
+//         }
+//         const parent = this.parent
+//         const panel = new Panel()
+//         const size1 = splitPos - props.splitterSpacing / 2
+//         const size2 = initialPixelSize - props.splitterSpacing - size1
+//         if (parent && parent.orientation === orientation) {
+//             /* Insert new sibling in parent splitter. */
+//             const pixelRatio = initialPixelSize / parent.childrenSize[this.childIndex]
+//             parent.childrenSize[this.childIndex] = (newFirst ? size2 : size1) / pixelRatio
+//             parent.InsertChild(panel, newFirst ? this.childIndex : this.childIndex + 1,
+//                 (newFirst ? size1 : size2) / pixelRatio)
 
-        } else {
-            /* Create new splitter. */
-            const children = newFirst ? [panel, this] : [this, panel]
-            const childIdx = this.childIndex
-            const splitter = new Splitter(orientation, children, [size1, size2])
-            if (parent) {
-                parent.SetChild(splitter, childIdx)
-            } else {
-                root = splitter
-                splitter.UpdateRect()
-                structureTracker.Update()
-            }
-        }
-        return true
-    }
+//         } else {
+//             /* Create new splitter. */
+//             const children = newFirst ? [panel, this] : [this, panel]
+//             const childIdx = this.childIndex
+//             const splitter = new Splitter(orientation, children, [size1, size2])
+//             if (parent) {
+//                 parent.SetChild(splitter, childIdx)
+//             } else {
+//                 root = splitter
+//                 splitter.UpdateRect()
+//                 structureTracker.Update()
+//             }
+//         }
+//         return true
+//     }
 
-    Expand(target: Panel) {
-        const parent: Splitter = this.parent!
-        /* Merge with sibling panel if it is the case. */
-        if (target.parent === parent) {
-            const siblingIdx = target.childIndex
-            if (siblingIdx !== this.childIndex - 1 && siblingIdx !== this.childIndex + 1) {
-                /* Can merge only with neighbor sibling panel. */
-                return
-            }
-            if (this.parent!.children.length > 2) {
-                this.parent!.childrenSize[this.childIndex] += this.parent!.childrenSize[siblingIdx]
-                this.parent!.RemoveChild(siblingIdx)
-            } else {
-                const grandParent = parent.parent
-                if (grandParent) {
-                    grandParent.SetChild(this, parent.childIndex)
-                } else {
-                    root = this
-                    this.parent = null
-                    this.UpdateRect()
-                    structureTracker.Update()
-                }
-            }
-            return
-        }
-        //XXX rebuild splitters if dragged outwards
-    }
+//     Expand(target: Panel) {
+//         const parent: Splitter = this.parent!
+//         /* Merge with sibling panel if it is the case. */
+//         if (target.parent === parent) {
+//             const siblingIdx = target.childIndex
+//             if (siblingIdx !== this.childIndex - 1 && siblingIdx !== this.childIndex + 1) {
+//                 /* Can merge only with neighbor sibling panel. */
+//                 return
+//             }
+//             if (this.parent!.children.length > 2) {
+//                 this.parent!.childrenSize[this.childIndex] += this.parent!.childrenSize[siblingIdx]
+//                 this.parent!.RemoveChild(siblingIdx)
+//             } else {
+//                 const grandParent = parent.parent
+//                 if (grandParent) {
+//                     grandParent.SetChild(this, parent.childIndex)
+//                 } else {
+//                     root = this
+//                     this.parent = null
+//                     this.UpdateRect()
+//                     structureTracker.Update()
+//                 }
+//             }
+//             return
+//         }
+//         //XXX rebuild splitters if dragged outwards
+//     }
 
-    OnGripPointerDown(e: PointerEvent, corner: T.Corner): void {
-        if (e.altKey || e.shiftKey || e.ctrlKey) {
-            return
-        }
-        this.gripDragInfo.pointerId = e.pointerId
-        this.gripDragInfo.corner = corner
-        this.gripDragInfo.startPos.x = e.pageX
-        this.gripDragInfo.startPos.y = e.pageY
-        const grip = this.grips[corner]
-        grip.isActive.value = true
-        grip.element!.setPointerCapture(e.pointerId)
-    }
+//     OnGripPointerDown(e: PointerEvent, corner: T.Corner): void {
+//         if (e.altKey || e.shiftKey || e.ctrlKey) {
+//             return
+//         }
+//         this.gripDragInfo.pointerId = e.pointerId
+//         this.gripDragInfo.corner = corner
+//         this.gripDragInfo.startPos.x = e.pageX
+//         this.gripDragInfo.startPos.y = e.pageY
+//         const grip = this.grips[corner]
+//         grip.isActive.value = true
+//         grip.element!.setPointerCapture(e.pointerId)
+//     }
 
-    EndGripDrag() {
-        if (this.gripDragInfo.pointerId === null) {
-            return
-        }
-        const grip = this.grips[this.gripDragInfo.corner]
-        grip.isActive.value = false
-        grip.element!.releasePointerCapture(this.gripDragInfo.pointerId)
-        this.gripDragInfo.pointerId = null
-        this.gripDragInfo.state = GripDragState.INITIAL
-        this.expandTarget = null
-        expandGhost.value = null
-    }
+//     EndGripDrag() {
+//         if (this.gripDragInfo.pointerId === null) {
+//             return
+//         }
+//         const grip = this.grips[this.gripDragInfo.corner]
+//         grip.isActive.value = false
+//         grip.element!.releasePointerCapture(this.gripDragInfo.pointerId)
+//         this.gripDragInfo.pointerId = null
+//         this.gripDragInfo.state = GripDragState.INITIAL
+//         this.expandTarget = null
+//         expandGhost.value = null
+//     }
 
-    OnGripPointerUp(e: PointerEvent, corner: T.Corner): void {
-        if (e.pointerId !== this.gripDragInfo.pointerId) {
-            return
-        }
-        if (this.gripDragInfo.state === GripDragState.EXPAND) {
-            this.Expand(this.expandTarget!)
-        }
-        this.EndGripDrag()
-    }
+//     OnGripPointerUp(e: PointerEvent, corner: T.Corner): void {
+//         if (e.pointerId !== this.gripDragInfo.pointerId) {
+//             return
+//         }
+//         if (this.gripDragInfo.state === GripDragState.EXPAND) {
+//             this.Expand(this.expandTarget!)
+//         }
+//         this.EndGripDrag()
+//     }
 
-    OnGripPointerMove(e: PointerEvent, corner: T.Corner): void {
-        if (e.pointerId !== this.gripDragInfo.pointerId) {
-            return
-        }
+//     OnGripPointerMove(e: PointerEvent, corner: T.Corner): void {
+//         if (e.pointerId !== this.gripDragInfo.pointerId) {
+//             return
+//         }
 
-        const dir = _GetCornerOrientation(corner)
-        const d = {x: (e.pageX - this.gripDragInfo.startPos.x) * dir.x,
-                   y: (e.pageY - this.gripDragInfo.startPos.y) * dir.y}
-        const clientCoord = this.PageToClientCoord(e.pageX, e.pageY)
-        const lytCoords = _PageToLayoutCoord(e.pageX, e.pageY)
+//         const dir = _GetCornerOrientation(corner)
+//         const d = {x: (e.pageX - this.gripDragInfo.startPos.x) * dir.x,
+//                    y: (e.pageY - this.gripDragInfo.startPos.y) * dir.y}
+//         const clientCoord = this.PageToClientCoord(e.pageX, e.pageY)
+//         const lytCoords = _PageToLayoutCoord(e.pageX, e.pageY)
 
-        if (this.gripDragInfo.state === GripDragState.INITIAL) {
-            if (d.x >= 0 && d.y >= 0 &&
-                (d.x >= props.panelInwardDragThreshold || d.y >= props.panelInwardDragThreshold) &&
-                Math.abs(d.x - d.y) > props.panelSplitDragDifferenceThreshold) {
+//         if (this.gripDragInfo.state === GripDragState.INITIAL) {
+//             if (d.x >= 0 && d.y >= 0 &&
+//                 (d.x >= props.panelInwardDragThreshold || d.y >= props.panelInwardDragThreshold) &&
+//                 Math.abs(d.x - d.y) > props.panelSplitDragDifferenceThreshold) {
 
-                const newFirst = d.x > d.y ? dir.x > 0 : dir.y > 0
-                if (!this.Split(
-                    d.x > d.y ? SplitterOrientation.HORIZONTAL : SplitterOrientation.VERTICAL,
-                    d.x > d.y ? clientCoord.x : clientCoord.y,
-                    newFirst)) {
+//                 const newFirst = d.x > d.y ? dir.x > 0 : dir.y > 0
+//                 if (!this.Split(
+//                     d.x > d.y ? SplitterOrientation.HORIZONTAL : SplitterOrientation.VERTICAL,
+//                     d.x > d.y ? clientCoord.x : clientCoord.y,
+//                     newFirst)) {
 
-                    this.EndGripDrag()
-                    return
-                }
-                this.EndGripDrag()
-                /* Ensure splitter separator element is created to set pointer capture on. */
-                nextTick(() => {
-                    this.parent!.StartDrag(e, newFirst ? this.childIndex - 1 : this.childIndex)
-                })
-                return
-            }
+//                     this.EndGripDrag()
+//                     return
+//                 }
+//                 this.EndGripDrag()
+//                 /* Ensure splitter separator element is created to set pointer capture on. */
+//                 nextTick(() => {
+//                     this.parent!.StartDrag(e, newFirst ? this.childIndex - 1 : this.childIndex)
+//                 })
+//                 return
+//             }
 
-            if ((d.x < 0 || d.y < 0) &&
-                (d.x <= -props.panelOutwardDragThreshold || d.y <= -props.panelOutwardDragThreshold)) {
+//             if ((d.x < 0 || d.y < 0) &&
+//                 (d.x <= -props.panelOutwardDragThreshold || d.y <= -props.panelOutwardDragThreshold)) {
 
-                const target = root.HitTestPanel(lytCoords.x, lytCoords.y)
-                if (!target) {
-                    return
-                }
-                const expandInfo = _CalculateExpandInfo(this.rect, target.rect)
-                if (!expandInfo) {
-                    return
-                }
-                expandGhost.value = {
-                    isActive: true,
-                    expandInfo
-                }
-                this.expandTarget = target
-                this.gripDragInfo.state = GripDragState.EXPAND
-                return
-            }
+//                 const target = root.HitTestPanel(lytCoords.x, lytCoords.y)
+//                 if (!target) {
+//                     return
+//                 }
+//                 const expandInfo = _CalculateExpandInfo(this.rect, target.rect)
+//                 if (!expandInfo) {
+//                     return
+//                 }
+//                 expandGhost.value = {
+//                     isActive: true,
+//                     expandInfo
+//                 }
+//                 this.expandTarget = target
+//                 this.gripDragInfo.state = GripDragState.EXPAND
+//                 return
+//             }
 
-            return
-        }
+//             return
+//         }
 
-        if (this.gripDragInfo.state === GripDragState.EXPAND) {
-            if (!this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
-                this.gripDragInfo.state = GripDragState.EXPAND_CANCELLED
-                expandGhost.value!.isActive = false
-            }
-            return
-        }
+//         if (this.gripDragInfo.state === GripDragState.EXPAND) {
+//             if (!this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
+//                 this.gripDragInfo.state = GripDragState.EXPAND_CANCELLED
+//                 expandGhost.value!.isActive = false
+//             }
+//             return
+//         }
 
-        if (this.gripDragInfo.state === GripDragState.EXPAND_CANCELLED) {
-            if (this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
-                this.gripDragInfo.state = GripDragState.EXPAND
-                expandGhost.value!.isActive = true
-            }
-            return
-        }
-    }
+//         if (this.gripDragInfo.state === GripDragState.EXPAND_CANCELLED) {
+//             if (this.expandTarget!.rect.Contains(lytCoords.x, lytCoords.y)) {
+//                 this.gripDragInfo.state = GripDragState.EXPAND
+//                 expandGhost.value!.isActive = true
+//             }
+//             return
+//         }
+//     }
 
-    HitTestPanel(x: number, y: number): Panel | null {
-        if (x < this.rect.x || x >= this.rect.x + this.rect.width ||
-            y < this.rect.y || y >= this.rect.y + this.rect.height) {
-            return null
-        }
-        return this
-    }
-}
+//     HitTestPanel(x: number, y: number): Panel | null {
+//         if (x < this.rect.x || x >= this.rect.x + this.rect.width ||
+//             y < this.rect.y || y >= this.rect.y + this.rect.height) {
+//             return null
+//         }
+//         return this
+//     }
+// }
 
 /** Contains instantiated content component. */
 class ContentPane {
@@ -825,11 +828,12 @@ class ReactiveTracker {
 // /////////////////////////////////////////////////////////////////////////////////////////////////
 // Private state and methods
 
-let root: Panel | Splitter = new Panel()
+const panels: Map<Id, Panel> = reactive(new Map())
+const edges: Map<Id, Edge> = reactive(new Map())
 const container: Vue.Ref<HTMLDivElement | null> = ref(null)
 const resizeObserver = new ResizeObserver(_OnContainerResize)
 /** Tracks all changes in content hierarchy. */
-const structureTracker = new ReactiveTracker()
+const structureTracker = new ReactiveTracker()//XXX is needed?
 const containerSize = reactive({width: 0, height: 0})
 const expandGhost: Vue.Ref<ExpandGhostInfo | null> = ref(null)
 
@@ -852,9 +856,8 @@ function _GetCornerOrientation(corner: T.Corner): Vector {
     }
 }
 
-function _OppositeOrientation(orientation: SplitterOrientation): SplitterOrientation {
-    return orientation === SplitterOrientation.HORIZONTAL ?
-        SplitterOrientation.VERTICAL : SplitterOrientation.HORIZONTAL
+function _OppositeOrientation(orientation: Orientation): Orientation {
+    return orientation === Orientation.HORIZONTAL ? Orientation.VERTICAL : Orientation.HORIZONTAL
 }
 
 /** @return Flattened list of all content panes. */
@@ -865,20 +868,8 @@ function *_GetAllContent(): Generator<ContentPane, any, undefined> {
 }
 
 /** @return Flattened list of all panels. */
-function *_GetAllPanels(): Generator<Panel> {
-
-    function *IterateItem(item: Panel | Splitter) {
-        if (item instanceof Splitter) {
-            for (const child of item.children) {
-                yield *IterateItem(child)
-            }
-        } else {
-            yield item
-        }
-    }
-
-    structureTracker.Touch()
-    yield *IterateItem(root)
+function *_GetAllPanels(): Generator<Panel, any, undefined> {
+    yield *panels.values()
 }
 
 /** @return Flattened list of all empty panels. */
@@ -888,21 +879,6 @@ function *_GetAllEmptyPanels(): Generator<Panel> {
             yield panel
         }
     }
-}
-
-/** @return Flattened list of all splitters (depth first traversal order). */
-function *_GetAllSplitters(): Generator<Splitter, any, undefined> {
-    function *IterateItem(item: Panel | Splitter) {
-        if (item instanceof Splitter) {
-            for (const child of item.children) {
-                yield *IterateItem(child)
-            }
-            yield item
-        }
-    }
-
-    structureTracker.Touch()
-    yield *IterateItem(root)
 }
 
 function _OnContainerResize(entries: ResizeObserverEntry[]) {
@@ -926,6 +902,7 @@ type ExpandInfo = {
     dir: T.Direction
 }
 
+//XXX is needed?
 /** Calculate resulting rectangle after expanding r1 to r2. Returns null if not possible to expand
  * into the provided rectangle.
  */
@@ -1001,6 +978,8 @@ function _CalculateExpandRect(r1: Rect, r2: Rect, dir: T.Direction): Rect | null
 }
 
 onMounted(() => {
+    const panel = new Panel()
+    panels.set(panel.id, panel)
     resizeObserver.observe(container.value!)
 })
 
@@ -1009,7 +988,11 @@ onBeforeUnmount(() => {
 })
 
 watch(containerSize, () => {
-    root.UpdateRect()
+    //XXX redistribute edges
+    // update rects
+    for (const panel of panels.values()) {
+        panel.UpdateRect()
+    }
 })
 
 </script>

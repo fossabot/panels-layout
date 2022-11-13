@@ -1,5 +1,5 @@
 <template>
-<div ref="container" class="container">
+<div ref="container" class="container" :style="minContainerSizeStyle">
     <div v-for="pane in _GetAllContent()" :key="pane.id" class="pane"
         :style="pane.positionStyle" >
         <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props"
@@ -64,6 +64,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "@vue/reactivity";
 import type * as Vue from "vue"
 import { ref, reactive, shallowReactive, onMounted, onBeforeUnmount, watch, nextTick } from "vue"
 import * as T from "./PublicTypes"
@@ -389,7 +390,6 @@ type GripDragInfo = {
     corner: T.Corner
     /** Page CS. */
     startPos: Vector
-    //XXX reactive?
     state: GripDragState
 }
 
@@ -402,6 +402,8 @@ class Panel {
     edgeBottom: Edge | null = null
     /** Absolute position in layout container bounds. */
     rect = reactive(new Rect())
+    /** Update when links to content panes changed. */
+    readonly layoutTracker = new ReactiveTracker()
 
     readonly children: ContentPane[] = []
 
@@ -463,7 +465,7 @@ class Panel {
     }
 
     get isEmpty() {
-        structureTracker.Touch()
+        this.layoutTracker.Touch()
         return this.children.length == 0
     }
 
@@ -1279,7 +1281,6 @@ function _OppositeDirection(dir: T.Direction): T.Direction {
     }
 }
 
-
 function _OrientationDirection(orientation: Orientation, positive: boolean): T.Direction {
     if (orientation === Orientation.HORIZONTAL) {
         return positive ? T.Direction.RIGHT : T.Direction.LEFT
@@ -1306,8 +1307,28 @@ function *_GetAllEmptyPanels(): Generator<Panel> {
 
 function _OnContainerResize(entries: ResizeObserverEntry[]) {
     const sz = entries[0].contentBoxSize[0]
+
+    if (containerSize.width > 0 && containerSize.height > 0 &&
+        sz.inlineSize > 0 && sz.blockSize > 0) {
+
+        const widthRatio = sz.inlineSize / containerSize.width
+        const heightRatio = sz.blockSize / containerSize.height
+        for (const edge of edges.values()) {
+            if (edge.orientation === Orientation.VERTICAL) {
+                edge.position *= widthRatio
+            } else {
+                edge.position *= heightRatio
+            }
+        }
+    }
+    //XXX handle minimal size and redistribute somehow if such is reached for some panels
+
     containerSize.width = sz.inlineSize
     containerSize.height = sz.blockSize
+
+    for (const panel of panels.values()) {
+        panel.UpdateRect()
+    }
 }
 
 function _PageToLayoutCoord(x: number, y: number): Vector {
@@ -1410,12 +1431,9 @@ onBeforeUnmount(() => {
     resizeObserver.disconnect()
 })
 
-watch(containerSize, () => {
-    //XXX redistribute edges
-    // update rects
-    for (const panel of panels.values()) {
-        panel.UpdateRect()
-    }
+const minContainerSizeStyle: Vue.ComputedRef<Vue.CSSProperties> = computed(() => {
+    //XXX scan panels chains in both directions
+    return {}
 })
 
 </script>

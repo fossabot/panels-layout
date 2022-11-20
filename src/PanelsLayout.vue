@@ -238,6 +238,14 @@ class Edge {
         return side === T.Direction.RIGHT || side === T.Direction.DOWN
     }
 
+    /** @return Direction from panel point of view). */
+    GetDirection(isPreceding: boolean): T.Direction {
+        if (this.orientation === Orientation.HORIZONTAL) {
+            return isPreceding ? T.Direction.RIGHT : T.Direction.LEFT
+        }
+        return isPreceding ? T.Direction.DOWN : T.Direction.UP
+    }
+
     GetChildren(side: T.Direction): Map<Id, Panel> {
         return this.children[Edge.IsPreceding(side) ? 0 : 1]
     }
@@ -374,6 +382,31 @@ class Edge {
             return containerSize.height
         }
     }
+
+    /** Merge this edge into the specified one. This edge is removed after that. In case it is
+     * merged into container edge (null argument, panels from border side are destroyed).
+     * @param dir Direction for the panel which initiates merging. When merging with container edge,
+     *  panels from opposite side are destroyed.
+     */
+    Merge(edge: Edge | null, dir: T.Direction): void {
+        let j = Edge.IsPreceding(dir) ? 0 : 1
+        /* It is safe in JS to iterate while deleting elements. */
+        for (const panel of this.children[j].values()) {
+            panel.BindEdge(edge, dir)
+            panel.UpdateRect()
+        }
+        j = j ? 0 : 1
+        const oppDir = _OppositeDirection(dir)
+        for (const panel of this.children[j].values()) {
+            if (edge) {
+                panel.BindEdge(edge, oppDir)
+                panel.UpdateRect()
+            } else {
+                panel.Destroy()
+            }
+        }
+        edges.delete(this.id)
+    }
 }
 
 type ExpandGhostInfo = {
@@ -463,6 +496,15 @@ class Panel {
                 right: "0"
             })
         }
+    }
+
+    Destroy(): void {
+        this.edgeLeft?.RemovePanel(this, T.Direction.LEFT)
+        this.edgeRight?.RemovePanel(this, T.Direction.RIGHT)
+        this.edgeTop?.RemovePanel(this, T.Direction.UP)
+        this.edgeBottom?.RemovePanel(this, T.Direction.DOWN)
+        //XXX some events
+        panels.delete(this.id)
     }
 
     UpdateRect(): void {
@@ -576,34 +618,54 @@ class Panel {
 
     Expand(target: Panel, dir: T.Direction): void {
         const edge = this.GetEdge(dir)
-        if (!edge) {
-            throw new Error("Internal error: no expand edge")
-        }
-        if (target.GetEdge(_OppositeDirection(dir)) !== edge) {
-            throw new Error("Internal error: expand edge mismatch")
-        }
+        _Assert(edge != null, "No expand edge")
+        _Assert(target.GetEdge(_OppositeDirection(dir)) === edge, "Expand edge mismatch")
 
         const farEdge = target.GetEdge(dir)
         const orthoNegDir = _OrientationDirection(edge.orientation, false)
         const orthoPosDir = _OrientationDirection(edge.orientation, true)
-        const orthoNegEdge = this.GetEdge(orthoNegDir)
-        const orthoPosEdge = this.GetEdge(orthoPosDir)
-        const targetOrthoNegEdge = target.GetEdge(orthoNegDir)
-        const targetOrthoPosEdge = target.GetEdge(orthoPosDir)
+        let orthoNegEdge = this.GetEdge(orthoNegDir)
+        let orthoPosEdge = this.GetEdge(orthoPosDir)
+        let targetOrthoNegEdge = target.GetEdge(orthoNegDir)
+        let targetOrthoPosEdge = target.GetEdge(orthoPosDir)
 
-        //XXX merge close ortho edges
+        /* Merge close ortho edges. */
+        if (orthoNegEdge !== targetOrthoNegEdge &&
+            Math.abs(Edge.GetPosition(orthoNegEdge, orthoNegDir) -
+                     Edge.GetPosition(targetOrthoNegEdge, orthoNegDir)) <= props.minSplitterContentSize) {
+
+            if (targetOrthoNegEdge == null) {
+                orthoNegEdge!.Merge(null, orthoNegDir)
+                orthoNegEdge = null
+            } else {
+                targetOrthoNegEdge.Merge(orthoNegEdge, orthoNegDir)
+                targetOrthoNegEdge = orthoNegEdge
+            }
+        }
+        if (orthoPosEdge !== targetOrthoPosEdge &&
+            Math.abs(Edge.GetPosition(orthoPosEdge, orthoPosDir) -
+                     Edge.GetPosition(targetOrthoPosEdge, orthoPosDir)) <= props.minSplitterContentSize) {
+
+
+            if (targetOrthoPosEdge == null) {
+                orthoPosEdge!.Merge(null, orthoPosDir)
+                orthoPosEdge = null
+            } else {
+                targetOrthoPosEdge.Merge(orthoPosEdge, orthoPosDir)
+                targetOrthoPosEdge = orthoPosEdge
+            }
+        }
 
         if (orthoNegEdge === targetOrthoNegEdge && orthoPosEdge === targetOrthoPosEdge) {
             /* Special simple case - just expand over a single neighbor. */
-            if (edge.children[0].size != 1 || edge.children[1].size != 1) {
-                throw new Error("Assumed single child on both edge sides")
-            }
+            _Assert((edge.children[0].size == 1 && edge.children[1].size == 1) ||
+                    (edge.children[0].size > 1 && edge.children[1].size > 1),
+                    "Assumed both edge sides either have single child or both have multiple children")
             this.BindEdge(farEdge, dir)
-            farEdge?.RemovePanel(target, dir)
-            targetOrthoNegEdge?.RemovePanel(target, orthoNegDir)
-            targetOrthoPosEdge?.RemovePanel(target, orthoPosDir)
-            panels.delete(target.id)
-            edges.delete(edge.id)
+            target.Destroy()
+            if (edge.children[0].size == 0) {
+                edges.delete(edge.id)
+            }
             this.UpdateRect()
             return
         }
@@ -773,9 +835,7 @@ class Panel {
                 }
                 const resultRect = _CalculateExpandRect(this.rect, this.expandTarget!.rect,
                                                         this.expandDirection)
-                if (!resultRect) {
-                    throw new Error("Internal error: empty expand rectangle")
-                }
+                _Assert(resultRect != null, "Empty expand rectangle")
                 expandGhost.value = {
                     isActive: true,
                     dir: this.expandDirection,
@@ -869,6 +929,12 @@ const resizeObserver = new ResizeObserver(_OnContainerResize)
 const structureTracker = new ReactiveTracker()//XXX is needed?
 const containerSize = reactive({width: 0, height: 0})
 const expandGhost: Vue.Ref<ExpandGhostInfo | null> = ref(null)
+
+function _Assert(condition: boolean, message: string): asserts condition {
+    if (!condition) {
+        throw new Error("Assertion failed: " + message)
+    }
+}
 
 function _GenerateId(): Id {
     return Date.now().toString(36).slice(-6) +

@@ -557,7 +557,7 @@ class Panel {
         return edge
     }
 
-    Expand(target: Panel, dir: T.Direction) {
+    Expand(target: Panel, dir: T.Direction): void {
         const edge = this.GetEdge(dir)
         if (!edge) {
             throw new Error("Internal error: no expand edge")
@@ -565,7 +565,29 @@ class Panel {
         if (target.GetEdge(_OppositeDirection(dir)) !== edge) {
             throw new Error("Internal error: expand edge mismatch")
         }
+        const farEdge = target.GetEdge(dir)
+        const orthoNegDir = _OrientationDirection(edge.orientation, false)
+        const orthoPosDir = _OrientationDirection(edge.orientation, true)
+        const orthoNegEdge = this.GetEdge(orthoNegDir)
+        const orthoPosEdge = this.GetEdge(orthoPosDir)
+        const targetOrthoNegEdge = target.GetEdge(orthoNegDir)
+        const targetOrthoPosEdge = target.GetEdge(orthoPosDir)
 
+        if (orthoNegEdge === targetOrthoNegEdge && orthoPosEdge === targetOrthoPosEdge) {
+            /* Special simple case - just expand over a single neighbor. */
+            if (edge.children[0].size != 1 || edge.children[1].size != 1) {
+                throw new Error("Assumed single child on both edge sides")
+            }
+            this.BindEdge(farEdge, dir)
+            farEdge?.RemovePanel(target, dir)
+            targetOrthoNegEdge?.RemovePanel(target, orthoNegDir)
+            targetOrthoPosEdge?.RemovePanel(target, orthoPosDir)
+            panels.delete(target.id)
+            edges.delete(edge.id)
+            this.UpdateRect()
+            return
+        }
+        //XXX
     }
 
     /**

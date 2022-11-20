@@ -196,6 +196,7 @@ type EdgeDragInfo = {
 class Edge {
     readonly id: Id = _GenerateId()
     readonly orientation: Orientation
+    /** Coordinate along corresponding axis in container CS. */
     position: number
     /** First list is for panel having this edge left or top, second one for panels having this
      * edge right or bottom.
@@ -355,6 +356,22 @@ class Edge {
             for (const panel of this.children[i].values()) {
                 panel.UpdateRect()
             }
+        }
+    }
+
+    static GetPosition(edge: Edge | null, dir: T.Direction): number {
+        if (edge) {
+            return edge.position
+        }
+        switch (dir) {
+        case T.Direction.LEFT:
+            return 0
+        case T.Direction.RIGHT:
+            return containerSize.width
+        case T.Direction.UP:
+            return 0
+        case T.Direction.DOWN:
+            return containerSize.height
         }
     }
 }
@@ -565,6 +582,7 @@ class Panel {
         if (target.GetEdge(_OppositeDirection(dir)) !== edge) {
             throw new Error("Internal error: expand edge mismatch")
         }
+
         const farEdge = target.GetEdge(dir)
         const orthoNegDir = _OrientationDirection(edge.orientation, false)
         const orthoPosDir = _OrientationDirection(edge.orientation, true)
@@ -572,6 +590,8 @@ class Panel {
         const orthoPosEdge = this.GetEdge(orthoPosDir)
         const targetOrthoNegEdge = target.GetEdge(orthoNegDir)
         const targetOrthoPosEdge = target.GetEdge(orthoPosDir)
+
+        //XXX merge close ortho edges
 
         if (orthoNegEdge === targetOrthoNegEdge && orthoPosEdge === targetOrthoPosEdge) {
             /* Special simple case - just expand over a single neighbor. */
@@ -586,6 +606,44 @@ class Panel {
             edges.delete(edge.id)
             this.UpdateRect()
             return
+        }
+
+        if (orthoNegEdge === targetOrthoNegEdge || orthoPosEdge === targetOrthoPosEdge) {
+            /* Sharing one edge. */
+            let sharedEdge: Edge | null
+            let sharedDir: T.Direction
+            let nonSharedEdge: Edge | null
+            let nonSharedTargetEdge: Edge | null
+            let nonSharedDir: T.Direction
+            let nonSharedInside: boolean
+            if (orthoNegEdge === targetOrthoNegEdge) {
+                sharedEdge = orthoNegEdge
+                sharedDir = orthoNegDir
+                nonSharedEdge = orthoPosEdge
+                nonSharedTargetEdge = targetOrthoPosEdge
+                nonSharedDir = orthoPosDir
+                nonSharedInside = Edge.GetPosition(nonSharedTargetEdge, nonSharedDir) <
+                    Edge.GetPosition(nonSharedEdge, nonSharedDir)
+            } else {
+                sharedEdge = orthoPosEdge
+                sharedDir = orthoPosDir
+                nonSharedEdge = orthoNegEdge
+                nonSharedTargetEdge = targetOrthoNegEdge
+                nonSharedDir = orthoNegDir
+                nonSharedInside = Edge.GetPosition(nonSharedTargetEdge, nonSharedDir) >
+                    Edge.GetPosition(nonSharedEdge, nonSharedDir)
+            }
+
+            if (!nonSharedInside) {
+                /* Shrink target panel. No any structural changes. */
+                this.BindEdge(farEdge, dir)
+                target.BindEdge(nonSharedEdge, sharedDir)
+                this.UpdateRect()
+                target.UpdateRect()
+                return
+            }
+
+            //XXX
         }
         //XXX
     }

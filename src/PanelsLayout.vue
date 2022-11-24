@@ -217,8 +217,15 @@ class Edge {
         maxPos: 0
     }
 
-    constructor(orientation: Orientation) {
+    constructor(orientation: Orientation, position: number) {
         this.orientation = orientation
+        this.position = position
+    }
+
+    Destroy() {
+        _Assert(this.children[0].size == 0, "Edge should be empty when destroying (0)")
+        _Assert(this.children[1].size == 0, "Edge should be empty when destroying (1)")
+        edges.delete(this.id)
     }
 
     AddPanel(panel: Panel, side: T.Direction) {
@@ -241,9 +248,9 @@ class Edge {
     /** @return Direction from panel point of view). */
     GetDirection(isPreceding: boolean): T.Direction {
         if (this.orientation === Orientation.HORIZONTAL) {
-            return isPreceding ? T.Direction.RIGHT : T.Direction.LEFT
+            return isPreceding ? T.Direction.DOWN : T.Direction.UP
         }
-        return isPreceding ? T.Direction.DOWN : T.Direction.UP
+        return isPreceding ? T.Direction.RIGHT : T.Direction.LEFT
     }
 
     GetChildren(side: T.Direction): Map<Id, Panel> {
@@ -307,7 +314,7 @@ class Edge {
             const pos = panel.rect.GetAxisCoord(oppOrientation) +
                 panel.rect.GetAxisSize(oppOrientation) - panel.GetMinSize(oppOrientation)
             /* Find minimal value. */
-            if (maxPosition === null || pos > maxPosition) {
+            if (maxPosition === null || pos < maxPosition) {
                 maxPosition = pos
             }
         }
@@ -406,6 +413,32 @@ class Edge {
             }
         }
         edges.delete(this.id)
+    }
+
+    /** Split the edge. Each side uses separate limit for children splitting. After this method
+     * returns this edge has children left with orthogonal positive edge less or equal to the
+     * specified limits. The returned edge has all the rest children. Null is returned if resulting
+     * edge will not have any children.
+     */
+    Split(posLimit: number[]): Edge {
+        const newEdgeChildren: Panel[][] = [[], []]
+        const splitDir = _OrientationDirection(this.orientation, true)
+        for (let i = 0; i < 2; i++) {
+            for (const child of this.children[i].values()) {
+                const pos = Edge.GetPosition(child.GetEdge(splitDir), splitDir)
+                if (pos > posLimit[i]) {
+                    newEdgeChildren[i].push(child)
+                }
+            }
+        }
+        const edge = _CreateEdge(this.orientation, this.position)
+        for (let i = 0; i < 2; i++) {
+            const dir = this.GetDirection(i == 0)
+            for (const child of newEdgeChildren[i].values()) {
+                child.BindEdge(edge, dir)
+            }
+        }
+        return edge
     }
 }
 
@@ -599,13 +632,10 @@ class Panel {
         const orthoDir = _OrientationDirection(oppOrientation, false)
         const orthoDirOpp = _OppositeDirection(orthoDir)
 
-        const edge = new Edge(oppOrientation)
-        edges.set(edge.id, edge)
-        edge.position = this.rect.GetAxisCoord(orientation) + splitPos
+        const edge = _CreateEdge(oppOrientation, this.rect.GetAxisCoord(orientation) + splitPos)
         const prevEdge = this.BindEdge(edge, edgeDir)
 
-        const panel = new Panel()
-        panels.set(panel.id, panel)
+        const panel = _CreatePanel()
         panel.BindEdge(prevEdge, edgeDir)
         panel.BindEdge(edge, _OppositeDirection(edgeDir))
         panel.BindEdge(this.GetEdge(orthoDir), orthoDir)
@@ -656,90 +686,137 @@ class Panel {
             }
         }
 
-        if (orthoNegEdge === targetOrthoNegEdge && orthoPosEdge === targetOrthoPosEdge) {
-            /* Special simple case - just expand over a single neighbor. */
-            _Assert((edge.children[0].size == 1 && edge.children[1].size == 1) ||
-                    (edge.children[0].size > 1 && edge.children[1].size > 1),
-                    "Assumed both edge sides either have single child or both have multiple children")
-            this.BindEdge(farEdge, dir)
-            target.Destroy()
-            if (edge.children[0].size == 0) {
-                edges.delete(edge.id)
-            }
-            this.UpdateRect()
-            return
+        const isNegOutside = Edge.GetPosition(targetOrthoNegEdge, orthoNegDir) <
+            Edge.GetPosition(orthoNegEdge, orthoNegDir)
+        const isPosOutside = Edge.GetPosition(targetOrthoPosEdge, orthoPosDir) >
+            Edge.GetPosition(orthoPosEdge, orthoPosDir)
+
+        /* Make some preparations. Expand edge is split to part above and below (along orthogonal
+         * axis, named by positive and negative axis direction) this panel. Target panel is split if
+         * both its orthogonal edges are outside this panel corresponding edges.
+         * Vertical case examples:
+         *
+         *            |
+         * -----------+
+         *    this    |  inside edge
+         *            +-----------
+         *            |  target
+         *
+         *
+         *            |  outside edge
+         *            +------------
+         *            |
+         * -----------+  target
+         *    this    |
+         *            ^expand edge
+         *
+         *
+         *      shared edge
+         * -----------+------------
+         *    this    |  target
+         *            |
+         *
+         *
+         * Split scheme:
+         *
+         * orth.neg. ||<expand neg. edge
+         * edge      ||
+         * ----------+|
+         *           ||   target orthogonal neg. edge
+         *    this   |+------------
+         *           ||
+         *           ||  target
+         * ---------+++
+         * ^orth.   ||^new edge (for left children, right children position limit is set to target
+         * pos. edge||           orthogonal pos. edge)
+         *          ||
+         *          +++------------
+         *expand    ||    ^ target orthogonal pos. edge
+         *pos. edge>||
+         *          ||
+         *  new edge^|
+         *           ^old edge
+         */
+        this.BindEdge(farEdge, dir)
+        let edgeSplitPos: number[]
+        if (Edge.IsPreceding(dir)) {
+            edgeSplitPos = [Edge.GetPosition(orthoPosEdge, orthoPosDir),
+                            Edge.GetPosition(targetOrthoPosEdge, orthoPosDir)]
+        } else {
+            edgeSplitPos = [Edge.GetPosition(targetOrthoPosEdge, orthoPosDir),
+                            Edge.GetPosition(orthoPosEdge, orthoPosDir)]
+        }
+        let expandPosEdge = edge.Split(edgeSplitPos)
+
+        let targetSplit: Panel | null = null
+        if (isNegOutside && isPosOutside) {
+            /* Split the target panel. */
+            targetSplit = _CreatePanel()
+            targetSplit.BindEdge(farEdge, dir)
+            targetSplit.BindEdge(expandPosEdge, _OppositeDirection(dir))
+            targetSplit.BindEdge(target.GetEdge(orthoPosDir), orthoPosDir)
+            /* Remaining edge will be set by orthogonal edge handling function. */
+        } else if (isPosOutside) {
+            /* Reassign target panel to positive part of previously split edge. */
+            target.BindEdge(expandPosEdge, _OppositeDirection(dir))
         }
 
-        if (orthoNegEdge === targetOrthoNegEdge || orthoPosEdge === targetOrthoPosEdge) {
-            /* Sharing one edge. */
-            let sharedEdge: Edge | null
-            let sharedDir: T.Direction
-            let nonSharedEdge: Edge | null
-            let nonSharedTargetEdge: Edge | null
-            let nonSharedDir: T.Direction
-            let nonSharedInside: boolean
-            if (orthoNegEdge === targetOrthoNegEdge) {
-                sharedEdge = orthoNegEdge
-                sharedDir = orthoNegDir
-                nonSharedEdge = orthoPosEdge
-                nonSharedTargetEdge = targetOrthoPosEdge
-                nonSharedDir = orthoPosDir
-                nonSharedInside = Edge.GetPosition(nonSharedTargetEdge, nonSharedDir) <
-                    Edge.GetPosition(nonSharedEdge, nonSharedDir)
-            } else {
-                sharedEdge = orthoPosEdge
-                sharedDir = orthoPosDir
-                nonSharedEdge = orthoNegEdge
-                nonSharedTargetEdge = targetOrthoNegEdge
-                nonSharedDir = orthoNegDir
-                nonSharedInside = Edge.GetPosition(nonSharedTargetEdge, nonSharedDir) >
-                    Edge.GetPosition(nonSharedEdge, nonSharedDir)
-            }
+        function HandleOrthogonalEdge(
+            orthoDir: T.Direction,
+            orthoEdge: Edge | null,
+            orthoTargetEdge: Edge | null,
+            isOutside: boolean,
+            target: Panel,
+            edge: Edge) {
 
-            if (!nonSharedInside) {
+            if (orthoEdge === orthoTargetEdge) {
+                /* Do nothing for shared edge. */
+                return
+            }
+            if (isOutside) {
                 /* Shrink target panel. No any structural changes. */
-                this.BindEdge(farEdge, dir)
-                target.BindEdge(nonSharedEdge, sharedDir)
-                this.UpdateRect()
-                target.UpdateRect()
+                target.BindEdge(orthoEdge, _OppositeDirection(orthoDir))
                 return
             }
 
-            /** Expand onto target panel. This panel non-shared edge side is bound to target panel
-             * non-shared edge.
+            /* Check if any neighbor over orthogonal edge is connected to expand edge. In such case
+             * orthogonal edge is merged into target orthogonal edge. Actually, it can be just
+             * checked if expand edge has some children from this panel side (this panel itself is
+             * already unbound from this edge).
              */
-            /* Check if any neighbor over non-shared edge is connected to expand edge. In such case
-             * non-shared edge is merged into target non-shared edge.
-             */
-            if (nonSharedEdge != null) {
-                for (const ngbPanel of nonSharedEdge.GetChildren(sharedDir).values()) {
-                    if (ngbPanel.GetEdge(dir) === edge) {
-                        this.BindEdge(farEdge, dir)
-                        target.Destroy()
-                        nonSharedEdge.Merge(nonSharedTargetEdge, nonSharedDir)
-                        this.UpdateRect()
-                        //XXX check edge split
-                        return
-                    }
-                }
+            if (edge.GetChildren(dir).size > 0) {
+                /* Orthogonal edge must exist in such case. */
+                orthoEdge!.Merge(orthoTargetEdge, orthoDir)
+                return
             }
 
-            this.BindEdge(farEdge, dir)
-            this.BindEdge(nonSharedTargetEdge, nonSharedDir)
-            target.Destroy()
-            this.UpdateRect()
+            this.BindEdge(orthoTargetEdge, orthoDir)
             const oppDir = _OppositeDirection(dir)
             const oppEdge = this.GetEdge(oppDir)
             for (const panel of edge.GetChildren(oppDir).values()) {
                 panel.BindEdge(oppEdge, oppDir)
                 panel.UpdateRect()
             }
-            _Assert(edge.children[0].size == 0, "Edge should be empty")
-            _Assert(edge.children[1].size == 0, "Edge should be empty")
-            edges.delete(edge.id)
-            return
         }
-        //XXX
+
+        HandleOrthogonalEdge.call(this, orthoNegDir, orthoNegEdge, targetOrthoNegEdge, isNegOutside,
+                                  target, edge)
+        HandleOrthogonalEdge.call(this, orthoPosDir, orthoPosEdge, targetOrthoPosEdge, isPosOutside,
+                                  targetSplit ? targetSplit : target, expandPosEdge)
+
+        if (!isNegOutside && !isPosOutside) {
+            target.Destroy()
+        } else {
+            target.UpdateRect()
+        }
+        if (edge.children[0].size == 0) {
+            edge.Destroy()
+        }
+        if (expandPosEdge.children[0].size == 0) {
+            expandPosEdge.Destroy()
+        }
+        this.UpdateRect()
+        targetSplit?.UpdateRect()
     }
 
     /**
@@ -1105,6 +1182,20 @@ function _CalculateExpandRect(r1: Rect, r2: Rect, dir: T.Direction): Rect | null
         return null
     }
     return new Rect(x, y, right - x, bottom - y)
+}
+
+function _CreateEdge(orientation: Orientation, position: number) {
+    const edge = new Edge(orientation, position)
+    edges.set(edge.id, edge)
+    return edge
+}
+
+//XXX content descriptor
+function _CreatePanel() {
+    const panel = new Panel()//XXX
+    panels.set(panel.id, panel)
+    //XXX event
+    return panel
 }
 
 onMounted(() => {

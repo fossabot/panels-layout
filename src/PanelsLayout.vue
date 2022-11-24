@@ -705,7 +705,39 @@ class Panel {
                 return
             }
 
-            //XXX
+            /** Expand onto target panel. This panel non-shared edge side is bound to target panel
+             * non-shared edge.
+             */
+            /* Check if any neighbor over non-shared edge is connected to expand edge. In such case
+             * non-shared edge is merged into target non-shared edge.
+             */
+            if (nonSharedEdge != null) {
+                for (const ngbPanel of nonSharedEdge.GetChildren(sharedDir).values()) {
+                    if (ngbPanel.GetEdge(dir) === edge) {
+                        this.BindEdge(farEdge, dir)
+                        target.Destroy()
+                        nonSharedEdge.Merge(nonSharedTargetEdge, nonSharedDir)
+                        this.UpdateRect()
+                        //XXX check edge split
+                        return
+                    }
+                }
+            }
+
+            this.BindEdge(farEdge, dir)
+            this.BindEdge(nonSharedTargetEdge, nonSharedDir)
+            target.Destroy()
+            this.UpdateRect()
+            const oppDir = _OppositeDirection(dir)
+            const oppEdge = this.GetEdge(oppDir)
+            for (const panel of edge.GetChildren(oppDir).values()) {
+                panel.BindEdge(oppEdge, oppDir)
+                panel.UpdateRect()
+            }
+            _Assert(edge.children[0].size == 0, "Edge should be empty")
+            _Assert(edge.children[1].size == 0, "Edge should be empty")
+            edges.delete(edge.id)
+            return
         }
         //XXX
     }
@@ -811,7 +843,6 @@ class Panel {
                 Math.abs(d.x - d.y) > props.panelSplitDragDifferenceThreshold) {
 
                 const newFirst = d.x > d.y ? dir.x > 0 : dir.y > 0
-                //XXX
                 const edge = this.Split(
                     d.x > d.y ? Orientation.HORIZONTAL : Orientation.VERTICAL,
                     d.x > d.y ? clientCoord.x : clientCoord.y,
@@ -926,7 +957,6 @@ const edges: Map<Id, Edge> = shallowReactive(new Map())
 const container: Vue.Ref<HTMLDivElement | null> = ref(null)
 const resizeObserver = new ResizeObserver(_OnContainerResize)
 /** Tracks all changes in content hierarchy. */
-const structureTracker = new ReactiveTracker()//XXX is needed?
 const containerSize = reactive({width: 0, height: 0})
 const expandGhost: Vue.Ref<ExpandGhostInfo | null> = ref(null)
 

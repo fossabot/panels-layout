@@ -7,8 +7,10 @@
  export interface ContentDescriptor {
      /** Vue component class. */
      component: any
-     /** Properties to bind to the instantiated component. */
-     props: Object
+     /** Properties to bind to the instantiated component via `v-bind` directive . */
+     props?: Object
+     /** Event to subscribe in the instantiated component via `v-on` directive. */
+     events?: Object
  }
 
  export type ContentDescriptorProvider = (selector: ContentSelector) => ContentDescriptor

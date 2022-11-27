@@ -3,7 +3,7 @@
     <div v-for="pane in _GetAllContent()" :key="pane.id" class="pane"
         :style="pane.positionStyle" >
         <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props"
-            :ref="el => pane.componentRef = el" />
+            :ref="(el: any) => pane.componentRef = el" />
     </div>
 
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
@@ -103,7 +103,7 @@ const props = withDefaults(defineProps<{
 
 const _Emit = defineEmits<{
     /** Fired when layout is changed. */
-    (e: "layoutUpdated", layoutDesc: T.LayoutDescriptor)
+    (e: "layoutUpdated", layoutDesc: T.LayoutDescriptor): void
 }>()
 
 /** Can be used to restore layout previously saved from `layoutUpdated` event. */
@@ -508,7 +508,7 @@ class Panel {
         state: GripDragState.INITIAL
     }
     expandTarget: Panel | null = null
-    expandDirection: T.Direction
+    expandDirection: T.Direction = T.Direction.UP
 
     constructor() {
         this.grips = {
@@ -761,13 +761,13 @@ class Panel {
             target.BindEdge(expandPosEdge, _OppositeDirection(dir))
         }
 
-        function HandleOrthogonalEdge(
+        const HandleOrthogonalEdge = (
             orthoDir: T.Direction,
             orthoEdge: Edge | null,
             orthoTargetEdge: Edge | null,
             isOutside: boolean,
             target: Panel,
-            edge: Edge) {
+            edge: Edge) => {
 
             if (orthoEdge === orthoTargetEdge) {
                 /* Do nothing for shared edge. */

@@ -9,8 +9,11 @@
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
         :style="panel.positionStyle">
         <slot name="emptyContent">
-            <!-- XXX -->
-            <div style="width: 100%;height:100%;background-color: darkgreen;">Empty panel {{panel.id}}</div>
+            <div style="width: 100%; height:100%; position: relative;">
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+                    Empty panel
+                </div>
+            </div>
         </slot>
     </div>
 
@@ -799,10 +802,10 @@ class Panel {
             }
         }
 
-        HandleOrthogonalEdge.call(this, orthoNegDir, orthoNegEdge, targetOrthoNegEdge, isNegOutside,
-                                  target, edge)
-        HandleOrthogonalEdge.call(this, orthoPosDir, orthoPosEdge, targetOrthoPosEdge, isPosOutside,
-                                  targetSplit ? targetSplit : target, expandPosEdge)
+        HandleOrthogonalEdge(orthoNegDir, orthoNegEdge, targetOrthoNegEdge, isNegOutside,
+                             target, edge)
+        HandleOrthogonalEdge(orthoPosDir, orthoPosEdge, targetOrthoPosEdge, isPosOutside,
+                             targetSplit ? targetSplit : target, expandPosEdge)
 
         if (!isNegOutside && !isPosOutside) {
             target.Destroy()

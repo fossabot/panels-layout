@@ -1309,10 +1309,10 @@ const minContainerSizeStyle: Vue.ComputedRef<Vue.CSSProperties> = computed(() =>
         width: 100%;
         height: 100%;
         opacity: 0.4;
-        background-color: aqua;//XXX
+        background-color: rgb(100, 100, 100);
 
         &.active {
-            background-color: orange;//XXX
+            background-color: rgb(216, 216, 216);
         }
     }
 }
@@ -1323,11 +1323,11 @@ const minContainerSizeStyle: Vue.ComputedRef<Vue.CSSProperties> = computed(() =>
     .default {
         width: 100%;
         height: 100%;
-        border: 2px solid rgb(255, 126, 126);//XXX
+        border: 2px solid rgb(160, 160, 160);
         border-radius: 4px;
 
         &.active {
-            border-color: red;//XXX
+            border-color: rgb(255, 255, 255);
         }
     }
 }

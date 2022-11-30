@@ -1,14 +1,16 @@
 <template>
 <div ref="container" class="container" :style="minContainerSizeStyle">
-    <div v-for="pane in _GetAllContent()" :key="pane.id" class="pane"
-        :style="pane.positionStyle" >
-        <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props"
-            :ref="(el: any) => pane.componentRef = el" />
+    <div v-for="pane in _GetAllContent()" :key="pane.id" class="pane" :style="pane.positionStyle" >
+        <slot name="contentPane" :contentDesc="pane.contentDesc"
+            :contentSelector="pane.contentSelector" :setContent="pane.SetContent.bind(pane)">
+            <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
+                v-on="pane.contentDesc.events ?? {}" />
+        </slot>
     </div>
 
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
         :style="panel.positionStyle">
-        <slot name="emptyContent">
+        <slot name="emptyContent" :setContent="panel.SetContent.bind(panel)" >
             <div style="width: 100%; height:100%; position: relative;">
                 <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
                     Empty panel
@@ -500,8 +502,7 @@ class Panel {
     rect = reactive(new Rect())
     /** Update when links to content panes changed. */
     readonly layoutTracker = new ReactiveTracker()
-
-    readonly children: ContentPane[] = []
+    readonly _children: ContentPane[] = []
 
     readonly grips: {[corner in T.Corner]: CornerGrip}
     readonly gripDragInfo: GripDragInfo = {
@@ -572,7 +573,12 @@ class Panel {
 
     get isEmpty() {
         this.layoutTracker.Touch()
-        return this.children.length == 0
+        return this._children.length == 0
+    }
+
+    get children() {
+        this.layoutTracker.Touch()
+        return this._children
     }
 
     GetEdge(side: T.Direction): Edge | null {
@@ -977,21 +983,33 @@ class Panel {
             return
         }
     }
+
+    SetContent(contentSelector: T.ContentSelector): void {
+        //XXX set current tab
+        console.log(contentSelector)
+        if (this._children.length == 0) {
+            this._children.push(
+                new ContentPane(contentSelector,
+                                props.contentDescriptorProvider(contentSelector),
+                                this))
+            this.layoutTracker.Update()
+        }
+    }
 }
 
 /** Contains instantiated content component. */
 class ContentPane {
     readonly id: Id = _GenerateId()
+    readonly contentSelector: T.ContentSelector
     readonly contentDesc: T.ContentDescriptor
-    /** Reference to instantiated component. */
-    componentRef: any
     parent: Panel
 
     //XXX reactivity
     style: any
 
-    constructor(desc: T.ContentDescriptor, parent: Panel)
+    constructor(selector: T.ContentSelector, desc: T.ContentDescriptor, parent: Panel)
     {
+        this.contentSelector = selector
         this.contentDesc = desc
         this.parent = parent
     }
@@ -1011,6 +1029,11 @@ class ContentPane {
         //XXX account tab height if any
         return this.parent.positionStyle
     }
+
+    SetContent(contentSelector: T.ContentSelector): void {
+        //XXX
+        console.log(contentSelector)
+    }
 }
 
 /** Helper class for manual tracking changes on complex data without making all the data reactive.
@@ -1019,7 +1042,7 @@ class ReactiveTracker {
     readonly value = ref(1)
 
     Touch(): void {
-        if (!this.value) {
+        if (!this.value.value) {
             throw new Error("Unexpected zero value")
         }
     }
@@ -1113,7 +1136,7 @@ function *_GetAllContent(): Generator<ContentPane, any, undefined> {
 /** @return List of all empty panels. */
 function *_GetAllEmptyPanels(): Generator<Panel> {
     for (const panel of panels.values()) {
-        if (panel.children.length === 0) {
+        if (panel.isEmpty) {
             yield panel
         }
     }
@@ -1202,8 +1225,10 @@ function _CreatePanel() {
 }
 
 onMounted(() => {
-    const panel = new Panel()
-    panels.set(panel.id, panel)
+    const r = container.value!.getClientRects()[0]
+    containerSize.width = r.width
+    containerSize.height = r.height
+    _CreatePanel().UpdateRect()
     resizeObserver.observe(container.value!)
 })
 

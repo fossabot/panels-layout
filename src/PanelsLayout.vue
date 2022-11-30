@@ -986,7 +986,6 @@ class Panel {
 
     SetContent(contentSelector: T.ContentSelector): void {
         //XXX set current tab
-        console.log(contentSelector)
         if (this._children.length == 0) {
             this._children.push(
                 new ContentPane(contentSelector,
@@ -994,6 +993,17 @@ class Panel {
                                 this))
             this.layoutTracker.Update()
         }
+    }
+
+    ReplaceContent(pane: ContentPane, contentSelector: T.ContentSelector): void {
+        const idx = this._children.indexOf(pane)
+        _Assert(idx !== -1, "Pane being replaced not found")
+        this._children.splice(idx, 1,
+            new ContentPane(contentSelector,
+                            props.contentDescriptorProvider(contentSelector),
+                            this))
+        pane.Destroy()
+        this.layoutTracker.Update()
     }
 }
 
@@ -1007,8 +1017,7 @@ class ContentPane {
     //XXX reactivity
     style: any
 
-    constructor(selector: T.ContentSelector, desc: T.ContentDescriptor, parent: Panel)
-    {
+    constructor(selector: T.ContentSelector, desc: T.ContentDescriptor, parent: Panel) {
         this.contentSelector = selector
         this.contentDesc = desc
         this.parent = parent
@@ -1030,9 +1039,12 @@ class ContentPane {
         return this.parent.positionStyle
     }
 
-    SetContent(contentSelector: T.ContentSelector): void {
+    Destroy(): void {
         //XXX
-        console.log(contentSelector)
+    }
+
+    SetContent(contentSelector: T.ContentSelector): void {
+        this.parent.ReplaceContent(this, contentSelector)
     }
 }
 

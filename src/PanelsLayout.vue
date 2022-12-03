@@ -1277,6 +1277,7 @@ const minContainerSizeStyle: Vue.ComputedRef<Vue.CSSProperties> = computed(() =>
 .cornerGrip {
     position: absolute;
     user-select: none;
+    touch-action: none;
     pointer-events: all;
 }
 
@@ -1296,6 +1297,7 @@ const minContainerSizeStyle: Vue.ComputedRef<Vue.CSSProperties> = computed(() =>
 .separator {
     position: absolute;
     user-select: none;
+    touch-action: none;
 }
 
 .expandGhost {

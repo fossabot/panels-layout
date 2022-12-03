@@ -906,7 +906,7 @@ class Panel {
         if (e.pointerId !== this.gripDragInfo.pointerId) {
             return
         }
-        if (this.gripDragInfo.state === GripDragState.EXPAND) {
+        if (this.gripDragInfo.state === GripDragState.EXPAND && e.type === "pointerup") {
             this.Expand(this.expandTarget!, this.expandDirection)
         }
         this.EndGripDrag()

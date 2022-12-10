@@ -2,7 +2,8 @@
 <div ref="container" class="container" :style="minContainerSizeStyle">
     <div v-for="pane in _GetAllContent()" :key="pane.id" class="pane" :style="pane.positionStyle" >
         <slot name="contentPane" :contentDesc="pane.contentDesc"
-            :contentSelector="pane.contentSelector" :setContent="pane.SetContent.bind(pane)">
+            :contentSelector="pane.contentSelector" :setContent="pane.SetContent.bind(pane)"
+            :setDraggable="pane.SetDraggable.bind(pane)">
             <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
                 v-on="pane.contentDesc.events ?? {}" />
         </slot>
@@ -10,7 +11,8 @@
 
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
         :style="panel.positionStyle">
-        <slot name="emptyContent" :setContent="panel.SetContent.bind(panel)" >
+        <slot name="emptyContent" :setContent="panel.SetContent.bind(panel)"
+             :setDraggable="panel.SetEmptyDraggable.bind(panel)" >
             <div style="width: 100%; height:100%; position: relative;">
                 <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
                     Empty panel
@@ -65,13 +67,20 @@
         </div>
     </template>
 
+
+    <div v-if="dragSource != null" class="dragSource" :style="dragSource.rect.positionStyle">
+        <slot name="dragSource">
+            <div class="default" />
+        </slot>
+    </div>
 </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from "@vue/reactivity";
-import type * as Vue from "vue"
-import { ref, reactive, shallowReactive, onMounted, onBeforeUnmount, watch, nextTick } from "vue"
+import * as Vue from "vue"
+import { ref, reactive, shallowReactive, onMounted, onBeforeUnmount, shallowRef, nextTick }
+    from "vue"
 import * as T from "./PublicTypes"
 
 
@@ -1005,6 +1014,58 @@ class Panel {
         pane.Destroy()
         this.layoutTracker.Update()
     }
+
+    SetEmptyDraggable(element: HTMLElement | Vue.Component | null): void {
+        //XXX
+    }
+}
+
+class DragController {
+    readonly element: HTMLElement
+    readonly isDragged: Vue.Ref<boolean> = ref(false)
+    readonly abortController = new AbortController()
+    dragPending = false
+
+    constructor(element: HTMLElement | Vue.Component) {
+        if (element instanceof HTMLElement) {
+            this.element = element
+        } else {
+            this.element = (element as any).$el as HTMLElement
+        }
+        this.element.draggable = true
+        const options = { signal: this.abortController.signal }
+        this.element.addEventListener("dragstart", this._OnDragStart.bind(this), options)
+        this.element.addEventListener("dragend", this._OnDragEnd.bind(this), options)
+    }
+
+    Dispose(): void {
+        this.abortController.abort()
+        this.element.draggable = false
+    }
+
+    _OnDragStart(e: DragEvent): void {
+        //XXX
+        console.log(e)
+        /* Seems that WebKit-based browsers have a problem - when DOM is changed in `dragstart`
+         * event handler, `dragend` is fired immediately. `setTimeout` is a workaround for that.
+         * Note that Vue `nextTick()` does not help here.
+         */
+        this.dragPending = true
+        setTimeout(() => {
+            if (this.dragPending) {
+                this.isDragged.value = true
+            }
+        }, 0)
+        e.stopPropagation()
+    }
+
+    _OnDragEnd(e: DragEvent): void {
+        //XXX
+        console.log(e)
+        this.dragPending = false
+        this.isDragged.value = false
+        e.stopPropagation()
+    }
 }
 
 /** Contains instantiated content component. */
@@ -1013,9 +1074,7 @@ class ContentPane {
     readonly contentSelector: T.ContentSelector
     readonly contentDesc: T.ContentDescriptor
     parent: Panel
-
-    //XXX reactivity
-    style: any
+    readonly dragController: Vue.ShallowRef<DragController | null> = shallowRef(null)
 
     constructor(selector: T.ContentSelector, desc: T.ContentDescriptor, parent: Panel) {
         this.contentSelector = selector
@@ -1045,6 +1104,19 @@ class ContentPane {
 
     SetContent(contentSelector: T.ContentSelector): void {
         this.parent.ReplaceContent(this, contentSelector)
+    }
+
+    SetDraggable(element: HTMLElement | Vue.Component | null): void {
+        if (element == null) {
+            if (this.dragController.value) {
+                this.dragController.value.Dispose()
+                this.dragController.value = null
+            }
+            return
+        }
+        if (!this.dragController.value) {
+            this.dragController.value = new DragController(element)
+        }
     }
 }
 
@@ -1253,6 +1325,24 @@ const minContainerSizeStyle: Vue.ComputedRef<Vue.CSSProperties> = computed(() =>
     return {}
 })
 
+class DragSource {
+    rect: Rect
+
+    constructor(pane: ContentPane) {
+        //XXX will have own rect with tabs
+        this.rect = pane.parent.rect
+    }
+}
+
+const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
+    for (const pane of _GetAllContent()) {
+        if (pane.dragController.value && pane.dragController.value.isDragged.value) {
+            return new DragSource(pane)
+        }
+    }
+    return null
+})
+
 </script>
 
 <style scoped lang="less">
@@ -1331,6 +1421,17 @@ const minContainerSizeStyle: Vue.ComputedRef<Vue.CSSProperties> = computed(() =>
         &.active {
             border-color: rgb(255, 255, 255);
         }
+    }
+}
+
+.dragSource {
+    position: absolute;
+
+    .default {
+        width: 100%;
+        height: 100%;
+        opacity: 0.4;
+        background-color: rgb(100, 100, 100);
     }
 }
 

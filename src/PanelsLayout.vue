@@ -1,13 +1,17 @@
 <template>
 <div ref="container" class="container" :style="minContainerSizeStyle">
-    <div v-for="pane in _GetAllContent()" :key="pane.id" class="pane" :style="pane.positionStyle" >
-        <slot name="contentPane" :contentDesc="pane.contentDesc"
-            :contentSelector="pane.contentSelector" :setContent="pane.SetContent.bind(pane)"
-            :setDraggable="pane.SetDraggable.bind(pane)">
-            <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
-                v-on="pane.contentDesc.events ?? {}" />
-        </slot>
-    </div>
+    <template v-for="pane in _GetAllContent()" :key="pane.id">
+        <div v-if="pane.isActive || pane.contentDesc.hideInactive" class="pane"
+            :style="pane.style">
+            <slot name="contentPane" :contentDesc="pane.contentDesc"
+                :contentSelector="pane.contentSelector" :setContent="pane.SetContent.bind(pane)"
+                :setDraggable="pane.SetDraggable.bind(pane)" :createTab="pane.CreateTab.bind(pane)"
+                :isTab="pane.parent.hasTabs" :tabIndex="pane.tabIndex" :isActive="pane.isActive">
+                <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
+                    v-on="pane.contentDesc.events ?? {}" />
+            </slot>
+        </div>
+    </template>
 
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
         :style="panel.positionStyle">
@@ -39,10 +43,20 @@
             @pointermove="panel.OnGripPointerMove($event, corner)" >
 
             <!-- XXX active needed? -->
-            <slot name="cornerGrip" :corner="corner" :active="grip.isActive">
-                <div class="cornerGripIcon" :class="{active: grip.isActive}"
+            <slot name="cornerGrip" :corner="corner" :active="grip.isActive.value">
+                <div class="cornerGripIcon" :class="{active: grip.isActive.value}"
                     :style="panel.GetCornerGripIconStyle(corner)" />
             </slot>
+        </div>
+
+        <div v-if="panel.hasTabs" class="tabBar" :style="panel.tabBarPositionStyle">
+            <slot name="tabPrepend" :panelId="panel.id"/>
+            <div v-for="pane in panel.children" class="tab" :key="pane.id">
+                <slot name="tab" :isActive="pane.isActive" :setActive="pane.SetActive.bind(pane)">
+                    <div class="tab" @click="pane.SetActive()">TAB</div>
+                </slot>
+            </div>
+            <slot name="tabAppend" :panelId="panel.id"/>
         </div>
     </div>
 
@@ -103,8 +117,15 @@ const props = withDefaults(defineProps<{
      */
     splitterDragZoneSize?: number,
     /** Minimal drag distance in pixels before panel expanding. */
-    panelOutwardDragThreshold?: number
-
+    panelOutwardDragThreshold?: number,
+    /** Minimal tab width in pixels. */
+    tabMinWidth?: number,
+    /** Maximal tab width in pixels. */
+    tabMaxWidth?: number,
+    /** Tab height in pixels. */
+    tabHeight?: number,
+    /** Show tab bar when panel contains single content pane. */
+    showSingleTab?: boolean
 }>(), {
     minSplitterContentSize: 30,
     panelsSpacing: 4,
@@ -112,7 +133,11 @@ const props = withDefaults(defineProps<{
     panelInwardDragThreshold: 16,
     panelSplitDragDifferenceThreshold: 12,
     splitterDragZoneSize: 10,
-    panelOutwardDragThreshold: 16
+    panelOutwardDragThreshold: 16,
+    tabMinWidth: 100,
+    tabMaxWidth: 200,
+    tabHeight: 30,
+    showSingleTab: false
 })
 
 const _Emit = defineEmits<{
@@ -161,13 +186,17 @@ class Rect {
         return orientation === Orientation.HORIZONTAL ? this.width : this.height
     }
 
-    get positionStyle() {
+    static GetPositionStyle(x: number, y: number, width: number, height: number): Vue.CSSProperties {
         return {
-            left: this.x + "px",
-            top: this.y + "px",
-            width: this.width + "px",
-            height: this.height + "px"
+            left: x + "px",
+            top: y + "px",
+            width: width + "px",
+            height: height + "px",
         }
+    }
+
+    get positionStyle(): Vue.CSSProperties {
+        return Rect.GetPositionStyle(this.x, this.y, this.width, this.height)
     }
 
     get area() {
@@ -509,9 +538,11 @@ class Panel {
     edgeBottom: Edge | null = null
     /** Absolute position in layout container bounds. */
     rect = reactive(new Rect())
+    tabbedRect = reactive(new Rect())
     /** Update when links to content panes changed. */
     readonly layoutTracker = new ReactiveTracker()
     readonly _children: ContentPane[] = []
+    _activePane: ContentPane | null = null
 
     readonly grips: {[corner in T.Corner]: CornerGrip}
     readonly gripDragInfo: GripDragInfo = {
@@ -522,6 +553,7 @@ class Panel {
     }
     expandTarget: Panel | null = null
     expandDirection: T.Direction = T.Direction.UP
+
 
     constructor() {
         this.grips = {
@@ -563,6 +595,11 @@ class Panel {
         this.rect.y = y1
         this.rect.width = x2 - x1
         this.rect.height = y2 - y1
+
+        this.tabbedRect.x = this.rect.x
+        this.tabbedRect.y = this.rect.y + props.tabHeight
+        this.tabbedRect.width = this.rect.width
+        this.tabbedRect.height = this.rect.height - props.tabHeight
     }
 
     PageToClientCoord(x: number, y: number): Vector {
@@ -572,22 +609,33 @@ class Panel {
         return result
     }
 
-    /** Get panel if any under the specified layout coordinates. */
-    // abstract HitTestPanel(x: number, y: number): Panel | null
-
     /** Reactive style attributes for absolute positioning inside the container. */
-    get positionStyle() {
+    get positionStyle(): Vue.CSSProperties {
         return this.rect.positionStyle
     }
 
-    get isEmpty() {
+    get tabBarPositionStyle(): Vue.CSSProperties {
+        return Rect.GetPositionStyle(0, 0, this.rect.width, props.tabHeight)
+    }
+
+    get isEmpty(): boolean {
         this.layoutTracker.Touch()
         return this._children.length == 0
     }
 
-    get children() {
+    get children(): ContentPane[] {
         this.layoutTracker.Touch()
         return this._children
+    }
+
+    get hasTabs(): boolean {
+        this.layoutTracker.Touch()
+        return this._children.length > 1
+    }
+
+    get activePane(): ContentPane | null {
+        this.layoutTracker.Touch()
+        return this._activePane
     }
 
     GetEdge(side: T.Direction): Edge | null {
@@ -993,25 +1041,46 @@ class Panel {
         }
     }
 
-    SetContent(contentSelector: T.ContentSelector): void {
-        //XXX set current tab
-        if (this._children.length == 0) {
-            this._children.push(
-                new ContentPane(contentSelector,
-                                props.contentDescriptorProvider(contentSelector),
-                                this))
+    SetActivePane(pane: ContentPane): void {
+        const idx = this._children.indexOf(pane)
+        _Assert(idx != -1, "Child pane not found")
+        if (this._activePane != pane) {
+            this._activePane = pane
             this.layoutTracker.Update()
+        }
+    }
+
+    SetContent(contentSelector: T.ContentSelector): void {
+        if (this._children.length == 0) {
+            this.InsertContent(0, contentSelector)
+        } else {
+            this.ReplaceContent(this._activePane!, contentSelector)
         }
     }
 
     ReplaceContent(pane: ContentPane, contentSelector: T.ContentSelector): void {
         const idx = this._children.indexOf(pane)
         _Assert(idx !== -1, "Pane being replaced not found")
-        this._children.splice(idx, 1,
-            new ContentPane(contentSelector,
-                            props.contentDescriptorProvider(contentSelector),
-                            this))
+        const newPane = new ContentPane(contentSelector,
+                                        props.contentDescriptorProvider(contentSelector),
+                                        this)
+        this._children.splice(idx, 1, newPane)
         pane.Destroy()
+        if (this._activePane === pane) {
+            this._activePane = newPane
+        }
+        this.layoutTracker.Update()
+    }
+
+    InsertContent(position: number, contentSelector: T.ContentSelector): void {
+        _Assert(position <= this._children.length, "Position out of range")
+        const pane = new ContentPane(contentSelector,
+                                     props.contentDescriptorProvider(contentSelector),
+                                     this)
+        this._children.splice(position, 0, pane)
+        if (this._activePane == null) {
+            this._activePane = pane
+        }
         this.layoutTracker.Update()
     }
 
@@ -1082,20 +1151,35 @@ class ContentPane {
         this.parent = parent
     }
 
-    get minWidth() {
+    get minWidth(): number {
         //XXX x,y per pane
         return props.minSplitterContentSize
     }
 
-    get minHeight() {
+    get minHeight(): number {
         //XXX x,y per pane
         return props.minSplitterContentSize
     }
 
-    /** Reactive style attributes for absolute positioning inside the container. */
-    get positionStyle() {
-        //XXX account tab height if any
-        return this.parent.positionStyle
+    get rect(): Rect {
+        return this.parent.hasTabs ? this.parent.tabbedRect : this.parent.rect
+    }
+
+    /** Reactive style attributes. */
+    get style(): Vue.CSSProperties {
+        const result = this.rect.positionStyle
+        if (!this.isActive && this.contentDesc.hideInactive) {
+            result.display = "none"
+        }
+        return result
+    }
+
+    get isActive(): boolean {
+        return this.parent.activePane === this
+    }
+
+    get tabIndex(): number {
+        return this.parent._children.indexOf(this)
     }
 
     Destroy(): void {
@@ -1104,6 +1188,31 @@ class ContentPane {
 
     SetContent(contentSelector: T.ContentSelector): void {
         this.parent.ReplaceContent(this, contentSelector)
+    }
+
+    CreateTab(contentSelector: T.ContentSelector,
+              position: T.TabPosition = T.TabPosition.NEXT,
+              switchTo: boolean = true): void {
+
+        let positionIndex
+        switch (position) {
+        case T.TabPosition.FIRST:
+            positionIndex = 0
+            break
+        case T.TabPosition.LAST:
+            positionIndex = this.parent._children.length
+            break
+        case T.TabPosition.PREV:
+            positionIndex = this.parent._children.indexOf(this)
+            break
+        case T.TabPosition.NEXT:
+            positionIndex = this.parent._children.indexOf(this) + 1
+            break
+        }
+        this.parent.InsertContent(positionIndex, contentSelector)
+        if (switchTo) {
+            this.parent.SetActivePane(this.parent._children[positionIndex])
+        }
     }
 
     SetDraggable(element: HTMLElement | Vue.Component | null): void {
@@ -1117,6 +1226,10 @@ class ContentPane {
         if (!this.dragController.value) {
             this.dragController.value = new DragController(element)
         }
+    }
+
+    SetActive(): void {
+        this.parent.SetActivePane(this)
     }
 }
 
@@ -1329,8 +1442,7 @@ class DragSource {
     rect: Rect
 
     constructor(pane: ContentPane) {
-        //XXX will have own rect with tabs
-        this.rect = pane.parent.rect
+        this.rect = pane.rect
     }
 }
 
@@ -1368,7 +1480,7 @@ const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
     position: absolute;
     user-select: none;
     touch-action: none;
-    pointer-events: all;
+    pointer-events: auto;
 }
 
 .cornerGripIcon {
@@ -1432,6 +1544,19 @@ const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
         height: 100%;
         opacity: 0.4;
         background-color: rgb(100, 100, 100);
+    }
+}
+
+.tabBar {
+    position: absolute;
+    display: flex;
+    flex-flow: row-nowrap;
+
+    .tab {
+        padding: 2px;
+        cursor: pointer;
+        user-select: none;
+        pointer-events: auto;
     }
 }
 

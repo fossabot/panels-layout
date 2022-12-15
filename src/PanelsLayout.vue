@@ -3,10 +3,16 @@
     <template v-for="pane in _GetAllContent()" :key="pane.id">
         <div v-if="pane.isActive || pane.contentDesc.hideInactive" class="pane"
             :style="pane.style">
-            <slot name="contentPane" :contentDesc="pane.contentDesc"
-                :contentSelector="pane.contentSelector" :setContent="pane.SetContent.bind(pane)"
-                :setDraggable="pane.SetDraggable.bind(pane)" :createTab="pane.CreateTab.bind(pane)"
-                :isTab="pane.parent.hasTabs" :tabIndex="pane.tabIndex" :isActive="pane.isActive">
+            <slot name="contentPane"
+                :contentDesc="pane.contentDesc"
+                :contentSelector="pane.contentSelector"
+                :setContent="pane.SetContent.bind(pane)"
+                :setDraggable="pane.SetDraggable.bind(pane)"
+                :createTab="pane.CreateTab.bind(pane)"
+                :closeTab="pane.CloseTab.bind(pane)"
+                :isTab="pane.parent.hasTabs"
+                :tabIndex="pane.tabIndex"
+                :isActive="pane.isActive">
                 <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
                     v-on="pane.contentDesc.events ?? {}" />
             </slot>
@@ -51,9 +57,17 @@
 
         <div v-if="panel.hasTabs" class="tabBar" :style="panel.tabBarPositionStyle">
             <slot name="tabPrepend" :panelId="panel.id"/>
-            <div v-for="pane in panel.children" class="tab" :key="pane.id">
-                <slot name="tab" :isActive="pane.isActive" :setActive="pane.SetActive.bind(pane)">
-                    <div class="tab" @click="pane.SetActive()">TAB</div>
+            <div v-for="pane in panel.children" class="tabContainer" :key="pane.id">
+                <slot name="tab"
+                    :isActive="pane.isActive"
+                    :setActive="pane.SetActive.bind(pane)"
+                    :tabIndex="pane.tabIndex"
+                    :contentDesc="pane.contentDesc"
+                    :contentSelector="pane.contentSelector"
+                    :setContent="pane.SetContent.bind(pane)"
+                    :createTab="pane.CreateTab.bind(pane)"
+                    :closeTab="pane.CloseTab.bind(pane)">
+                    <div class="defaultTab" @click="pane.SetActive()">TAB</div>
                 </slot>
             </div>
             <slot name="tabAppend" :panelId="panel.id"/>
@@ -1073,7 +1087,7 @@ class Panel {
     }
 
     InsertContent(position: number, contentSelector: T.ContentSelector): void {
-        _Assert(position <= this._children.length, "Position out of range")
+        _Assert(position >= 0 && position <= this._children.length, "Position out of range")
         const pane = new ContentPane(contentSelector,
                                      props.contentDescriptorProvider(contentSelector),
                                      this)
@@ -1081,6 +1095,25 @@ class Panel {
         if (this._activePane == null) {
             this._activePane = pane
         }
+        this.layoutTracker.Update()
+    }
+
+    RemoveContent(position: number): void {
+        _Assert(position >= 0 && position <= this._children.length, "Position out of range")
+        const pane = this._children[position]
+        this._children.splice(position, 1)
+        if (this.activePane === pane) {
+            if (this._children.length > 0) {
+                let newIdx = position
+                if (newIdx >= this._children.length) {
+                    newIdx = this._children.length -1
+                }
+                this._activePane = this._children[newIdx]
+            } else {
+                this._activePane = null
+            }
+        }
+        pane.Destroy()
         this.layoutTracker.Update()
     }
 
@@ -1179,7 +1212,7 @@ class ContentPane {
     }
 
     get tabIndex(): number {
-        return this.parent._children.indexOf(this)
+        return this.parent.children.indexOf(this)
     }
 
     Destroy(): void {
@@ -1203,16 +1236,20 @@ class ContentPane {
             positionIndex = this.parent._children.length
             break
         case T.TabPosition.PREV:
-            positionIndex = this.parent._children.indexOf(this)
+            positionIndex = this.tabIndex
             break
         case T.TabPosition.NEXT:
-            positionIndex = this.parent._children.indexOf(this) + 1
+            positionIndex = this.tabIndex + 1
             break
         }
         this.parent.InsertContent(positionIndex, contentSelector)
         if (switchTo) {
             this.parent.SetActivePane(this.parent._children[positionIndex])
         }
+    }
+
+    CloseTab(): void {
+        this.parent.RemoveContent(this.tabIndex)
     }
 
     SetDraggable(element: HTMLElement | Vue.Component | null): void {
@@ -1550,13 +1587,18 @@ const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
 .tabBar {
     position: absolute;
     display: flex;
-    flex-flow: row-nowrap;
+    flex-flow: row nowrap;
+    align-items: stretch;
 
-    .tab {
-        padding: 2px;
+    .tabContainer {
         cursor: pointer;
         user-select: none;
         pointer-events: auto;
+
+        .defaultTab {
+            height: 100%;
+            padding: 2px;
+        }
     }
 }
 

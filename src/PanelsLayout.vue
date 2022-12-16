@@ -3,16 +3,7 @@
     <template v-for="pane in _GetAllContent()" :key="pane.id">
         <div v-if="pane.isActive || pane.contentDesc.hideInactive" class="pane"
             :style="pane.style">
-            <slot name="contentPane"
-                :contentDesc="pane.contentDesc"
-                :contentSelector="pane.contentSelector"
-                :setContent="pane.SetContent.bind(pane)"
-                :setDraggable="pane.SetDraggable.bind(pane)"
-                :createTab="pane.CreateTab.bind(pane)"
-                :closeTab="pane.CloseTab.bind(pane)"
-                :isTab="pane.parent.hasTabs"
-                :tabIndex="pane.tabIndex"
-                :isActive="pane.isActive">
+            <slot name="contentPane" v-bind="pane.slotProps">
                 <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
                     v-on="pane.contentDesc.events ?? {}" />
             </slot>
@@ -29,6 +20,19 @@
                 </div>
             </div>
         </slot>
+    </div>
+
+    <div v-for="panel in panels.values()" :key="panel.id" class="panel"
+        :style="panel.positionStyle">
+        <div v-if="panel.hasTabs" class="tabBar" :style="panel.tabBarPositionStyle">
+            <slot name="tabPrepend" :panelId="panel.id"/>
+            <div v-for="pane in panel.children" class="tabContainer" :key="pane.id">
+                <slot name="tab" v-bind="pane.slotProps">
+                    <div class="defaultTab" @click="pane.SetActive()">TAB</div>
+                </slot>
+            </div>
+            <slot name="tabAppend" :panelId="panel.id"/>
+        </div>
     </div>
 
     <div v-for="edge in edges.values()" :key="edge.id" class="separator"
@@ -53,24 +57,6 @@
                 <div class="cornerGripIcon" :class="{active: grip.isActive.value}"
                     :style="panel.GetCornerGripIconStyle(corner)" />
             </slot>
-        </div>
-
-        <div v-if="panel.hasTabs" class="tabBar" :style="panel.tabBarPositionStyle">
-            <slot name="tabPrepend" :panelId="panel.id"/>
-            <div v-for="pane in panel.children" class="tabContainer" :key="pane.id">
-                <slot name="tab"
-                    :isActive="pane.isActive"
-                    :setActive="pane.SetActive.bind(pane)"
-                    :tabIndex="pane.tabIndex"
-                    :contentDesc="pane.contentDesc"
-                    :contentSelector="pane.contentSelector"
-                    :setContent="pane.SetContent.bind(pane)"
-                    :createTab="pane.CreateTab.bind(pane)"
-                    :closeTab="pane.CloseTab.bind(pane)">
-                    <div class="defaultTab" @click="pane.SetActive()">TAB</div>
-                </slot>
-            </div>
-            <slot name="tabAppend" :panelId="panel.id"/>
         </div>
     </div>
 
@@ -1213,6 +1199,21 @@ class ContentPane {
 
     get tabIndex(): number {
         return this.parent.children.indexOf(this)
+    }
+
+    get slotProps(): object {
+        return {
+            contentDesc: this.contentDesc,
+            contentSelector: this.contentSelector,
+            setContent: this.SetContent.bind(this),
+            setDraggable: this.SetDraggable.bind(this),
+            createTab: this.CreateTab.bind(this),
+            closeTab: this.CloseTab.bind(this),
+            isTab: this.parent.hasTabs,
+            tabIndex: this.tabIndex,
+            isActive: this.isActive,
+            setActive: this.SetActive.bind(this)
+        }
     }
 
     Destroy(): void {

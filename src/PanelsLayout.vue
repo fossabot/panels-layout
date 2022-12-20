@@ -93,7 +93,8 @@
 <script setup lang="ts">
 import { computed } from "@vue/reactivity";
 import * as Vue from "vue"
-import { ref, reactive, shallowReactive, onMounted, onBeforeUnmount, shallowRef, nextTick }
+import { ref, reactive, shallowReactive, onMounted, onBeforeUnmount, shallowRef, nextTick,
+         customRef }
     from "vue"
 import * as T from "./PublicTypes"
 
@@ -273,12 +274,12 @@ class Edge {
 
     AddPanel(panel: Panel, side: T.Direction) {
         this.children[Edge.IsPreceding(side) ? 0 : 1].set(panel.id, panel)
-        this.layoutTracker.Update()
+        this.layoutTracker.Trigger()
     }
 
     RemovePanel(panel: Panel, side: T.Direction) {
         this.children[Edge.IsPreceding(side) ? 0 : 1].delete(panel.id)
-        this.layoutTracker.Update()
+        this.layoutTracker.Trigger()
     }
 
     /** Check if panel is in preceding children list, if the edge is for the specified direction
@@ -301,7 +302,7 @@ class Edge {
     }
 
     get separatorStyle(): Vue.CSSProperties {
-        this.layoutTracker.Touch()
+        this.layoutTracker.Track()
         let minCoord: number | null = null
         let maxCoord: number | null = null
         for (const panel of this.children[0].values()) {
@@ -619,22 +620,22 @@ class Panel {
     }
 
     get isEmpty(): boolean {
-        this.layoutTracker.Touch()
+        this.layoutTracker.Track()
         return this._children.length == 0
     }
 
     get children(): ContentPane[] {
-        this.layoutTracker.Touch()
+        this.layoutTracker.Track()
         return this._children
     }
 
     get hasTabs(): boolean {
-        this.layoutTracker.Touch()
+        this.layoutTracker.Track()
         return this._children.length > 1
     }
 
     get activePane(): ContentPane | null {
-        this.layoutTracker.Touch()
+        this.layoutTracker.Track()
         return this._activePane
     }
 
@@ -1046,7 +1047,7 @@ class Panel {
         _Assert(idx != -1, "Child pane not found")
         if (this._activePane != pane) {
             this._activePane = pane
-            this.layoutTracker.Update()
+            this.layoutTracker.Trigger()
         }
     }
 
@@ -1069,7 +1070,7 @@ class Panel {
         if (this._activePane === pane) {
             this._activePane = newPane
         }
-        this.layoutTracker.Update()
+        this.layoutTracker.Trigger()
     }
 
     InsertContent(position: number, contentSelector: T.ContentSelector): void {
@@ -1081,7 +1082,7 @@ class Panel {
         if (this._activePane == null) {
             this._activePane = pane
         }
-        this.layoutTracker.Update()
+        this.layoutTracker.Trigger()
     }
 
     RemoveContent(position: number): void {
@@ -1100,7 +1101,7 @@ class Panel {
             }
         }
         pane.Destroy()
-        this.layoutTracker.Update()
+        this.layoutTracker.Trigger()
     }
 
     SetEmptyDraggable(element: HTMLElement | Vue.Component): void {
@@ -1292,16 +1293,28 @@ class ContentPane {
 /** Helper class for manual tracking changes on complex data without making all the data reactive.
  */
 class ReactiveTracker {
-    readonly value = ref(1)
 
-    Touch(): void {
-        if (!this.value.value) {
-            throw new Error("Unexpected zero value")
-        }
+    private track?: () => void
+    private trigger?: () => void
+
+    constructor() {
+        customRef((track, trigger) => {
+            this.track = track
+            this.trigger = trigger
+
+            return {
+                get() {},
+                set() {}
+            }
+        })
     }
 
-    Update(): void {
-        this.value.value++
+    Track(): void {
+        this.track!()
+    }
+
+    Trigger(): void {
+        this.trigger!()
     }
 }
 

@@ -1103,18 +1103,20 @@ class Panel {
         this.layoutTracker.Update()
     }
 
-    SetEmptyDraggable(element: HTMLElement | Vue.Component | null): void {
+    SetEmptyDraggable(element: HTMLElement | Vue.Component): void {
         //XXX
     }
 }
 
 class DragController {
+    readonly rawElement: HTMLElement | Vue.Component
     readonly element: HTMLElement
     readonly isDragged: Vue.Ref<boolean> = ref(false)
     readonly abortController = new AbortController()
     dragPending = false
 
     constructor(element: HTMLElement | Vue.Component) {
+        this.rawElement = element
         if (element instanceof HTMLElement) {
             this.element = element
         } else {
@@ -1162,7 +1164,7 @@ class ContentPane {
     readonly contentSelector: T.ContentSelector
     readonly contentDesc: T.ContentDescriptor
     parent: Panel
-    readonly dragController: Vue.ShallowRef<DragController | null> = shallowRef(null)
+    readonly dragControllers: Map<any, DragController> = shallowReactive(new Map())
 
     constructor(selector: T.ContentSelector, desc: T.ContentDescriptor, parent: Panel) {
         this.contentSelector = selector
@@ -1201,7 +1203,16 @@ class ContentPane {
         return this.parent.children.indexOf(this)
     }
 
-    get slotProps(): object {
+    get isDragged(): boolean {
+        for (const ctrl of this.dragControllers.values()) {
+            if (ctrl.isDragged.value) {
+                return true
+            }
+        }
+        return false
+    }
+
+    get slotProps() {
         return {
             contentDesc: this.contentDesc,
             contentSelector: this.contentSelector,
@@ -1253,16 +1264,23 @@ class ContentPane {
         this.parent.RemoveContent(this.tabIndex)
     }
 
-    SetDraggable(element: HTMLElement | Vue.Component | null): void {
+    SetDraggable(id: any, element: HTMLElement | Vue.Component | null): void {
         if (element == null) {
-            if (this.dragController.value) {
-                this.dragController.value.Dispose()
-                this.dragController.value = null
+            const ctrl = this.dragControllers.get(id)
+            if (ctrl) {
+                this.dragControllers.delete(id)
+                ctrl.Dispose()
             }
             return
         }
-        if (!this.dragController.value) {
-            this.dragController.value = new DragController(element)
+        const ctrl = this.dragControllers.get(id)
+        if (ctrl) {
+            if (element !== ctrl.rawElement) {
+                this.dragControllers.set(id, new DragController(element))
+                ctrl.Dispose()
+            }
+        } else {
+            this.dragControllers.set(id, new DragController(element))
         }
     }
 
@@ -1486,7 +1504,7 @@ class DragSource {
 
 const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
     for (const pane of _GetAllContent()) {
-        if (pane.dragController.value && pane.dragController.value.isDragged.value) {
+        if (pane.isDragged) {
             return new DragSource(pane)
         }
     }

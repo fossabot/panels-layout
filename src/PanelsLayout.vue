@@ -1,17 +1,22 @@
 <template>
 <div ref="container" class="container" :style="minContainerSizeStyle">
-    <template v-for="pane in _GetAllContent()" :key="pane.id">
-        <div v-if="pane.isActive || pane.contentDesc.hideInactive" class="pane"
-            :style="pane.style">
-            <slot name="contentPane" v-bind="pane.slotProps">
-                <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
-                    v-on="pane.contentDesc.events ?? {}" />
-            </slot>
+    <template v-for="panel in _GetAllNonEmptyPanels()" :key="panel.id">
+        <div class="panel" :style="panel.positionStyle"
+            :ref="el => panel.SetDropTarget(0, el as HTMLElement)">
+            <template v-for="pane in panel.children" :key="pane.id">
+                <div v-if="pane.isActive || pane.contentDesc.hideInactive" class="pane"
+                    :style="pane.style">
+                    <slot name="contentPane" v-bind="pane.slotProps">
+                        <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
+                            v-on="pane.contentDesc.events ?? {}" />
+                    </slot>
+                </div>
+            </template>
         </div>
     </template>
 
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
-        :style="panel.positionStyle">
+        :style="panel.positionStyle" :ref="el => panel.SetDropTarget(1, el as HTMLElement)">
         <slot name="emptyContent" :setContent="panel.SetContent.bind(panel)"
              :setDraggable="panel.SetEmptyDraggable.bind(panel)" >
             <div style="width: 100%; height:100%; position: relative;">
@@ -22,18 +27,20 @@
         </slot>
     </div>
 
-    <div v-for="panel in panels.values()" :key="panel.id" class="panel"
-        :style="panel.positionStyle">
-        <div v-if="panel.hasTabs" class="tabBar" :style="panel.tabBarPositionStyle">
-            <slot name="tabPrepend" :panelId="panel.id"/>
-            <div v-for="pane in panel.children" class="tabContainer" :key="pane.id">
-                <slot name="tab" v-bind="pane.slotProps">
-                    <div class="defaultTab" @click="pane.SetActive()">TAB</div>
-                </slot>
+    <!-- Tabs layer. Should be below edges. -->
+    <template v-for="panel in panels.values()" :key="panel.id">
+        <div v-if="panel.hasTabs" class="panel" :style="panel.positionStyle">
+            <div class="tabBar" :style="panel.tabBarPositionStyle">
+                <slot name="tabPrepend" :panelId="panel.id"/>
+                <div v-for="pane in panel.children" class="tabContainer" :key="pane.id">
+                    <slot name="tab" v-bind="pane.slotProps">
+                        <div class="defaultTab" @click="pane.SetActive()">TAB</div>
+                    </slot>
+                </div>
+                <slot name="tabAppend" :panelId="panel.id"/>
             </div>
-            <slot name="tabAppend" :panelId="panel.id"/>
         </div>
-    </div>
+    </template>
 
     <div v-for="edge in edges.values()" :key="edge.id" class="separator"
         :ref="el => edge.element = el as HTMLElement" :style="edge.separatorStyle"
@@ -42,6 +49,7 @@
             @pointercancel="edge.OnPointerUp($event)"
             @pointermove="edge.OnPointerMove($event)" />
 
+    <!-- Corner grips layer. -->
     <div v-for="panel in panels.values()" :key="panel.id" class="panel"
         :style="panel.positionStyle">
         <div v-for="(grip, corner) in panel.grips" :key="corner"
@@ -530,6 +538,102 @@ type GripDragInfo = {
     state: GripDragState
 }
 
+const dragDataType = "application/x-panels-layout"
+
+/**
+ * @param s Data type from drag event.
+ * @return Source pane ID if data type matches, null if no match.
+ */
+function ParseDragDataType(s: string): Id | null {
+    if (!s.startsWith(dragDataType)) {
+        return null
+    }
+    if (s.charAt(dragDataType.length) != ":") {
+        return null
+    }
+    return s.substring(dragDataType.length + 1)
+}
+
+class DropController {
+    readonly rawElement: HTMLElement | Vue.Component
+    readonly element: HTMLElement
+    readonly abortController = new AbortController()
+    readonly isHovered = ref(false)
+    sourceId: Id | null = null
+    enterNesting: number = 0
+
+    constructor(element: HTMLElement | Vue.Component) {
+        this.rawElement = element
+        if (element instanceof HTMLElement) {
+            this.element = element
+        } else {
+            this.element = (element as any).$el as HTMLElement
+        }
+        const options = { signal: this.abortController.signal }
+        this.element.addEventListener("dragenter", this._OnDragEnter.bind(this), options)
+        this.element.addEventListener("dragleave", this._OnDragLeave.bind(this), options)
+        this.element.addEventListener("dragover", this._OnDragOver.bind(this), options)
+        this.element.addEventListener("drop", this._OnDrop.bind(this), options)
+    }
+
+    Dispose(): void {
+        this.abortController.abort()
+    }
+
+    _OnDragEnter(e: DragEvent): void {
+        if (!e.dataTransfer?.types.length) {
+            return
+        }
+        const sourceId = ParseDragDataType(e.dataTransfer.types[0])
+        if (!sourceId) {
+            return
+        }
+        if (this.enterNesting && this.sourceId == sourceId) {
+            this.enterNesting++
+            e.preventDefault()
+            return
+        }
+        this.sourceId = sourceId
+        this.enterNesting = 1
+        this.isHovered.value = true
+        console.log("matched", sourceId)//XXX
+        // XXX check self drop
+
+        e.preventDefault()
+    }
+
+    _OnDragOver(e: DragEvent): void {
+        if (this.sourceId && this.sourceId == ParseDragDataType(e.dataTransfer!.types[0])) {
+            e.preventDefault()
+        }
+    }
+
+    _OnDragLeave(e: DragEvent): void {
+        if (!this.sourceId || this.sourceId !== ParseDragDataType(e.dataTransfer!.types[0])) {
+            return
+        }
+        this.enterNesting--
+        if (this.enterNesting == 0) {
+            this.sourceId = null
+            this.isHovered.value = false
+            console.log("leave")//XXX
+        }
+        e.preventDefault()
+    }
+
+    _OnDrop(e: DragEvent): void {
+        if (!this.sourceId || this.sourceId !== ParseDragDataType(e.dataTransfer!.types[0])) {
+            return
+        }
+        //XXX handle
+        console.log("drop")//XXX
+        this.enterNesting = 0
+        this.sourceId = null
+        this.isHovered.value = false
+        e.preventDefault()
+    }
+}
+
 class Panel {
     readonly id: Id = _GenerateId()
     /** It is either bound to some edge or to container corresponding edge if null. */
@@ -554,6 +658,8 @@ class Panel {
     }
     expandTarget: Panel | null = null
     expandDirection: T.Direction = T.Direction.UP
+    dropController: (DropController | null)[] = [null, null]
+    dropTargetElement: (HTMLElement | null)[] = [null, null]
 
 
     constructor() {
@@ -575,6 +681,19 @@ class Panel {
                 right: "0"
             })
         }
+    }
+
+    SetDropTarget(index: number, el: HTMLElement | null): void {
+
+        if (el !== this.dropTargetElement[index] && this.dropController[index]) {
+            this.dropController[index]!.Dispose()
+        }
+        if (el && el !== this.dropTargetElement[index]) {
+            this.dropController[index] = new DropController(el)
+        } else if (el === null) {
+            this.dropController[index] = null
+        }
+        this.dropTargetElement[index] = el
     }
 
     Destroy(): void {
@@ -1111,13 +1230,15 @@ class Panel {
 
 class DragController {
     readonly rawElement: HTMLElement | Vue.Component
+    readonly paneId: Id
     readonly element: HTMLElement
     readonly isDragged: Vue.Ref<boolean> = ref(false)
     readonly abortController = new AbortController()
     dragPending = false
 
-    constructor(element: HTMLElement | Vue.Component) {
+    constructor(element: HTMLElement | Vue.Component, paneId: Id) {
         this.rawElement = element
+        this.paneId = paneId
         if (element instanceof HTMLElement) {
             this.element = element
         } else {
@@ -1135,8 +1256,6 @@ class DragController {
     }
 
     _OnDragStart(e: DragEvent): void {
-        //XXX
-        console.log(e)
         /* Seems that WebKit-based browsers have a problem - when DOM is changed in `dragstart`
          * event handler, `dragend` is fired immediately. `setTimeout` is a workaround for that.
          * Note that Vue `nextTick()` does not help here.
@@ -1147,12 +1266,14 @@ class DragController {
                 this.isDragged.value = true
             }
         }, 0)
-        e.stopPropagation()
+        e.dataTransfer!.effectAllowed = "copyMove"
+        /* Encode ID in type to make it possible to retrieve it not only in drop event. */
+        e.dataTransfer!.setData(`${dragDataType}:${this.paneId}`, this.paneId)
     }
 
     _OnDragEnd(e: DragEvent): void {
         //XXX
-        console.log(e)
+        console.log("end", e)//XXX
         this.dragPending = false
         this.isDragged.value = false
         e.stopPropagation()
@@ -1189,7 +1310,10 @@ class ContentPane {
 
     /** Reactive style attributes. */
     get style(): Vue.CSSProperties {
-        const result = this.rect.positionStyle
+        const result: Vue.CSSProperties = {}
+        if (this.parent.hasTabs) {
+            result.top = props.tabHeight + "px"
+        }
         if (!this.isActive && this.contentDesc.hideInactive) {
             result.display = "none"
         }
@@ -1277,11 +1401,11 @@ class ContentPane {
         const ctrl = this.dragControllers.get(id)
         if (ctrl) {
             if (element !== ctrl.rawElement) {
-                this.dragControllers.set(id, new DragController(element))
+                this.dragControllers.set(id, new DragController(element, this.id))
                 ctrl.Dispose()
             }
         } else {
-            this.dragControllers.set(id, new DragController(element))
+            this.dragControllers.set(id, new DragController(element, this.id))
         }
     }
 
@@ -1399,10 +1523,17 @@ function *_GetAllContent(): Generator<ContentPane, any, undefined> {
     }
 }
 
-/** @return List of all empty panels. */
 function *_GetAllEmptyPanels(): Generator<Panel> {
     for (const panel of panels.values()) {
         if (panel.isEmpty) {
+            yield panel
+        }
+    }
+}
+
+function *_GetAllNonEmptyPanels(): Generator<Panel> {
+    for (const panel of panels.values()) {
+        if (!panel.isEmpty) {
             yield panel
         }
     }
@@ -1534,6 +1665,8 @@ const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
 
 .pane {
     position: absolute;
+    inset: 0;
+    pointer-events: auto;
 }
 
 .emptyPanel {

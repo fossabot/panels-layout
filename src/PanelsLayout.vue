@@ -1923,6 +1923,7 @@ const dropTarget: Vue.ComputedRef<DropTarget | null> = computed(() => {
     display: flex;
     flex-flow: row nowrap;
     align-items: stretch;
+    overflow: hidden;
 
     .tabContainer {
         cursor: pointer;

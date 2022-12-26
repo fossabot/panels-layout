@@ -1,18 +1,18 @@
 <template>
 <div ref="container" class="container" :style="minContainerSizeStyle">
-    <template v-for="panel in _GetAllNonEmptyPanels()" :key="panel.id">
-        <div class="panel" :style="panel.positionStyle"
-            :ref="el => panel.SetDropTarget(0, el as HTMLElement)">
-            <template v-for="pane in panel.children" :key="pane.id">
+    <template v-for="pane in _GetAllContent()" :key="pane.id">
+        <template v-if="pane.isActive || pane.contentDesc.hideInactive">
+            <div class="panel" :style="pane.containerStyle"
+                :ref="el => pane.parent.SetDropTarget(0, el as HTMLElement)">
                 <div v-if="pane.isActive || pane.contentDesc.hideInactive" class="pane"
-                    :style="pane.style" :key="pane.id">
+                    :style="pane.style">
                     <slot name="contentPane" v-bind="pane.slotProps">
                         <component :is="pane.contentDesc.component" v-bind="pane.contentDesc.props ?? {}"
                             v-on="pane.contentDesc.events ?? {}" />
                     </slot>
                 </div>
-            </template>
-        </div>
+            </div>
+        </template>
     </template>
 
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
@@ -1437,6 +1437,14 @@ class ContentPane {
         if (this.parent.hasTabs) {
             result.top = props.tabHeight + "px"
         }
+        if (!this.isActive && this.contentDesc.hideInactive) {
+            result.display = "none"
+        }
+        return result
+    }
+
+    get containerStyle(): Vue.CSSProperties {
+        const result = this.parent.positionStyle
         if (!this.isActive && this.contentDesc.hideInactive) {
             result.display = "none"
         }

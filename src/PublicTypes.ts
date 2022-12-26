@@ -44,3 +44,24 @@ export const enum TabPosition {
     PREV = "PREV",
     NEXT = "NEXT"
 }
+
+export const enum DragAndDropMode {
+    /** Swap source and target. Copied if targeted another layout instance. */
+    SWAP = "SWAP",
+    /** Source pane is moved into target panel (replace target pane). Copied if targeted another
+     * layout instance.
+     */
+    MOVE = "MOVE",
+    /** Target pane is replaced by a copy of source (created based on its content selector). */
+    COPY = "COPY",
+    /** Source pane is moved into new tab in target panel. Copied if targeted another layout
+     *  instance.
+     */
+    MOVE_NEW_TAB = "MOVE_NEW_TAB",
+    /** A copy of source is opened in a new tab (created based on its content selector). No tab if
+     * target panel is initially empty.
+     */
+    COPY_NEW_TAB = "COPY_NEW_TAB"
+}
+
+export type DragAndDropModeSelectorFunc = (event: DragEvent) => DragAndDropMode

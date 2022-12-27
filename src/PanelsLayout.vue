@@ -569,7 +569,7 @@ interface DragData {
     /** Null for dragging empty pane. */
     paneId: Id | null,
     panelId: Id,
-    contentSelector: T.ContentSelector
+    contentSelector: T.ContentSelector | null
 }
 
 /**
@@ -715,7 +715,17 @@ class Panel {
     }
     expandTarget: Panel | null = null
     expandDirection: T.Direction = T.Direction.UP
+    readonly dragControllers: Map<any, DragController> = shallowReactive(new Map())
     readonly dropController: Vue.ShallowRef<DropController | null> = shallowRef(null)
+
+    get isDragged(): boolean {
+        for (const ctrl of this.dragControllers.values()) {
+            if (ctrl.isDragged.value) {
+                return true
+            }
+        }
+        return false
+    }
 
     get isDropHovered(): boolean {
         if (this.dropController.value != null && this.dropController.value.isHovered.value) {
@@ -1308,8 +1318,24 @@ class Panel {
         this.layoutTracker.Trigger()
     }
 
-    SetEmptyDraggable(element: HTMLElement | Vue.Component): void {
-        //XXX
+    SetEmptyDraggable(id: any, element: HTMLElement | Vue.Component | null): void {
+        if (element == null) {
+            const ctrl = this.dragControllers.get(id)
+            if (ctrl) {
+                this.dragControllers.delete(id)
+                ctrl.Dispose()
+            }
+            return
+        }
+        const ctrl = this.dragControllers.get(id)
+        if (ctrl) {
+            if (element !== ctrl.rawElement) {
+                this.dragControllers.set(id, new DragController(element, null, this))
+                ctrl.Dispose()
+            }
+        } else {
+            this.dragControllers.set(id, new DragController(element, null, this))
+        }
     }
 
     /** Drop pane into this panel. */
@@ -1318,6 +1344,7 @@ class Panel {
         const sourcePanel = panels.get(dragData.panelId)
         const sourcePaneIdx = sourcePane && sourcePanel ?
             sourcePanel._children.indexOf(sourcePane) : -1
+        const activePaneIdx = this._activePane ? this._children.indexOf(this._activePane) : -1
 
         const moveSource = sourcePane && (mode === T.DragAndDropMode.SWAP ||
             mode === T.DragAndDropMode.MOVE || mode === T.DragAndDropMode.MOVE_NEW_TAB)
@@ -1335,31 +1362,46 @@ class Panel {
                 sourcePanel!.SelectActive(sourcePaneIdx)
                 sourcePanel!.layoutTracker.Trigger()
             }
+
+        } else if (sourcePanel && dragData.paneId == null && mode === T.DragAndDropMode.SWAP &&
+                   this._activePane) {
+            /* Swap with empty source. */
+            sourcePanel.children.push(this._activePane)
+            this._activePane.SetParent(sourcePanel)
+            sourcePanel._activePane = this._activePane
+            sourcePanel.layoutTracker.Trigger()
+            this._children.splice(activePaneIdx, 1)
+            this.SelectActive(activePaneIdx)
         }
 
-        const newPane = moveSource ? sourcePane : this.CreateContentPane(dragData.contentSelector)
-        if (!newTab && this._activePane) {
-            this._children.splice(this._children.indexOf(this._activePane), 1, newPane)
-        } else {
-            this._children.push(newPane)
+        if (moveSource || dragData.contentSelector) {
+            const newPane = moveSource ? sourcePane : this.CreateContentPane(dragData.contentSelector!)
+            if (!newTab && this._activePane) {
+                this._children.splice(this._children.indexOf(this._activePane), 1, newPane)
+            } else {
+                this._children.push(newPane)
+            }
+            newPane.SetParent(this)
+            this._activePane = newPane
         }
-        newPane.SetParent(this)
-        this._activePane = newPane
+
         this.layoutTracker.Trigger()
     }
 }
 
 class DragController {
     readonly rawElement: HTMLElement | Vue.Component
-    readonly pane: ContentPane
+    readonly pane: ContentPane | null
+    readonly _panel: Panel | null
     readonly element: HTMLElement
     readonly isDragged: Vue.Ref<boolean> = ref(false)
     readonly abortController = new AbortController()
     dragPending = false
 
-    constructor(element: HTMLElement | Vue.Component, pane: ContentPane) {
+    constructor(element: HTMLElement | Vue.Component, pane: ContentPane | null, panel: Panel | null) {
         this.rawElement = element
         this.pane = pane
+        this._panel = panel
         if (element instanceof HTMLElement) {
             this.element = element
         } else {
@@ -1369,6 +1411,13 @@ class DragController {
         const options = { signal: this.abortController.signal }
         this.element.addEventListener("dragstart", this._OnDragStart.bind(this), options)
         this.element.addEventListener("dragend", this._OnDragEnd.bind(this), options)
+    }
+
+    get panel(): Panel {
+        if (this.pane) {
+            return this.pane.parent
+        }
+        return this._panel!
     }
 
     Dispose(): void {
@@ -1389,10 +1438,10 @@ class DragController {
         }, 0)
         e.dataTransfer!.effectAllowed = "copyMove"
         /* Encode ID in type to make it possible to retrieve it not only in drop event. */
-        e.dataTransfer!.setData(`${dragDataType}:${this.pane.parent.id}`, JSON.stringify({
-            paneId: this.pane.id,
-            panelId: this.pane.parent.id,
-            contentSelector: this.pane.contentSelector
+        e.dataTransfer!.setData(`${dragDataType}:${this.panel.id}`, JSON.stringify({
+            paneId: this.pane?.id ?? null,
+            panelId: this.panel.id,
+            contentSelector: this.pane?.contentSelector ?? null
         } as DragData))
     }
 
@@ -1555,11 +1604,11 @@ class ContentPane {
         const ctrl = this.dragControllers.get(id)
         if (ctrl) {
             if (element !== ctrl.rawElement) {
-                this.dragControllers.set(id, new DragController(element, this))
+                this.dragControllers.set(id, new DragController(element, this, this.parent))
                 ctrl.Dispose()
             }
         } else {
-            this.dragControllers.set(id, new DragController(element, this))
+            this.dragControllers.set(id, new DragController(element, this, this.parent))
         }
     }
 

@@ -3,7 +3,7 @@
     <template v-for="pane in _GetAllContent()" :key="pane.id">
         <template v-if="pane.isActive || pane.contentDesc.hideInactive">
             <div class="panel" :style="pane.containerStyle"
-                :ref="el => pane.parent.SetDropTarget(0, el as HTMLElement)">
+                :ref="el => pane.SetDropTarget(el as HTMLElement)">
                 <div v-if="pane.isActive || pane.contentDesc.hideInactive" class="pane"
                     :style="pane.style">
                     <slot name="contentPane" v-bind="pane.slotProps">
@@ -16,7 +16,7 @@
     </template>
 
     <div v-for="panel in _GetAllEmptyPanels()" :key="panel.id" class="emptyPanel"
-        :style="panel.positionStyle" :ref="el => panel.SetDropTarget(1, el as HTMLElement)">
+        :style="panel.positionStyle" :ref="el => panel.SetDropTarget(el as HTMLElement)">
         <slot name="emptyContent" :setContent="panel.SetContent.bind(panel)"
              :setDraggable="panel.SetEmptyDraggable.bind(panel)" >
             <div style="width: 100%; height:100%; position: relative;">
@@ -588,7 +588,7 @@ function ParseDragDataType(s: string): Id | null {
 
 class DropController {
     readonly rawElement: HTMLElement | Vue.Component
-    readonly panel: Panel
+    panel: Panel
     readonly element: HTMLElement
     readonly abortController = new AbortController()
     readonly isHovered = ref(false)
@@ -613,6 +613,10 @@ class DropController {
 
     Dispose(): void {
         this.abortController.abort()
+    }
+
+    SetPanel(panel: Panel): void {
+        this.panel = panel
     }
 
     _OnDragEnter(e: DragEvent): void {
@@ -711,28 +715,28 @@ class Panel {
     }
     expandTarget: Panel | null = null
     expandDirection: T.Direction = T.Direction.UP
-    dropController: (DropController | null)[] = [null, null]
-    dropTargetElement: (HTMLElement | null)[] = [null, null]
-    readonly dropTracker = new ReactiveTracker()
+    readonly dropController: Vue.ShallowRef<DropController | null> = shallowRef(null)
 
     get isDropHovered(): boolean {
-        this.dropTracker.Track()
-        if (this.dropController[0] && this.dropController[0].isHovered.value) {
+        if (this.dropController.value != null && this.dropController.value.isHovered.value) {
             return true
         }
-        if (this.dropController[1] && this.dropController[1].isHovered.value) {
-            return true
+        for (const pane of this.children) {
+            if (pane.dropController.value != null && pane.dropController.value.isHovered.value) {
+                return true
+            }
         }
         return false
     }
 
     get dropMode(): T.DragAndDropMode | null {
-        this.dropTracker.Track()
-        if (this.dropController[0] && this.dropController[0].mode.value) {
-            return this.dropController[0].mode.value
+        if (this.dropController.value && this.dropController.value.mode.value) {
+            return this.dropController.value.mode.value
         }
-        if (this.dropController[1] && this.dropController[1].mode.value) {
-            return this.dropController[1].mode.value
+        for (const pane of this.children) {
+            if (pane.dropController.value != null && pane.dropController.value.mode.value) {
+                return pane.dropController.value.mode.value
+            }
         }
         return null
     }
@@ -758,19 +762,16 @@ class Panel {
         }
     }
 
-    SetDropTarget(index: number, el: HTMLElement | null): void {
-
-        if (el !== this.dropTargetElement[index] && this.dropController[index]) {
-            this.dropController[index]!.Dispose()
+    SetDropTarget(el: HTMLElement | null): void {
+        if (el && el !== this.dropController.value?.rawElement) {
+            if (this.dropController.value) {
+                this.dropController.value.Dispose()
+            }
+            this.dropController.value = new DropController(el, this)
+        } else if (el === null && this.dropController.value) {
+            this.dropController.value.Dispose()
+            this.dropController.value = null
         }
-        if (el && el !== this.dropTargetElement[index]) {
-            this.dropController[index] = new DropController(el, this)
-            this.dropTracker.Trigger()
-        } else if (el === null && this.dropController[index]) {
-            this.dropController[index] = null
-            this.dropTracker.Trigger()
-        }
-        this.dropTargetElement[index] = el
     }
 
     Destroy(): void {
@@ -1326,7 +1327,7 @@ class Panel {
         if (sourcePaneIdx != -1) {
             if (this._activePane && mode === T.DragAndDropMode.SWAP) {
                 sourcePanel!.children.splice(sourcePaneIdx, 1, this._activePane)
-                this._activePane.parent = sourcePanel!
+                this._activePane.SetParent(sourcePanel!)
                 sourcePanel!._activePane = this._activePane
                 sourcePanel!.layoutTracker.Trigger()
             } else if (moveSource) {
@@ -1337,13 +1338,12 @@ class Panel {
         }
 
         const newPane = moveSource ? sourcePane : this.CreateContentPane(dragData.contentSelector)
-        if (newTab || !this._activePane) {
+        if (!newTab && this._activePane) {
+            this._children.splice(this._children.indexOf(this._activePane), 1, newPane)
+        } else {
             this._children.push(newPane)
-        } else if (this._activePane) {
-            const activeIdx = this._children.indexOf(this._activePane)
-            this._children.splice(activeIdx, 1, newPane)
         }
-        newPane.parent = this
+        newPane.SetParent(this)
         this._activePane = newPane
         this.layoutTracker.Trigger()
     }
@@ -1410,6 +1410,7 @@ class ContentPane {
     readonly contentDesc: T.ContentDescriptor
     parent: Panel
     readonly dragControllers: Map<any, DragController> = shallowReactive(new Map())
+    readonly dropController: Vue.ShallowRef<DropController | null> = shallowRef(null)
 
     constructor(selector: T.ContentSelector, desc: T.ContentDescriptor, parent: Panel) {
         this.contentSelector = selector
@@ -1485,6 +1486,28 @@ class ContentPane {
 
     Destroy(): void {
         panes.delete(this.id)
+    }
+
+    SetParent(parent: Panel) {
+        if (parent === this.parent) {
+            return
+        }
+        this.parent = parent
+        if (this.dropController.value) {
+            this.dropController.value.SetPanel(parent)
+        }
+    }
+
+    SetDropTarget(el: HTMLElement | null): void {
+        if (el && el !== this.dropController.value?.rawElement) {
+            if (this.dropController.value) {
+                this.dropController.value.Dispose()
+            }
+            this.dropController.value = new DropController(el, this.parent)
+        } else if (el === null && this.dropController.value) {
+            this.dropController.value.Dispose()
+            this.dropController.value = null
+        }
     }
 
     SetContent(contentSelector: T.ContentSelector): void {

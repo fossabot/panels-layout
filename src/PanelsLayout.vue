@@ -838,7 +838,7 @@ class Panel {
 
     get hasTabs(): boolean {
         this.layoutTracker.Track()
-        return this._children.length > 1
+        return props.showSingleTab ? this._children.length > 0 : this._children.length > 1
     }
 
     get activePane(): ContentPane | null {

@@ -17,13 +17,38 @@ export interface ContentDescriptor {
     hideInactive?: boolean
 }
 
+export type Id = string
+
+export const enum Orientation {
+    VERTICAL,
+    HORIZONTAL
+}
+
 export type ContentDescriptorProvider = (selector: ContentSelector) => ContentDescriptor
+
+export type EdgeDescriptor = {
+    id: Id
+    orientation: Orientation
+    position: number
+}
+
+export type PanelDescriptor = {
+    left: Id | null
+    right: Id | null
+    top: Id | null
+    bottom: Id | null
+    content: ContentSelector[]
+    activeIdx: number
+}
 
 /**
  * Serializable type for saving and restoring current layout.
  */
-export interface LayoutDescriptor {
-    //XXX
+export type LayoutDescriptor = {
+    width: number
+    height: number
+    edges: EdgeDescriptor[]
+    panels: PanelDescriptor[]
 }
 
 export const enum Corner {

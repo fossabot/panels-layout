@@ -178,20 +178,100 @@ const _Emit = defineEmits<{
     (e: "layoutUpdated", layoutDesc: T.LayoutDescriptor): void
 }>()
 
-/** Can be used to restore layout previously saved from `layoutUpdated` event. */
-function SetLayout(layoutDesc: T.LayoutDescriptor): void {
-    //XXX
+function GetLayout(): T.LayoutDescriptor {
+    const _edges: T.EdgeDescriptor[] = []
+    for (const edge of edges.values()) {
+        _edges.push({
+            id: edge.id,
+            orientation: edge.orientation,
+            position: edge.position
+        })
+    }
+    const _panels: T.PanelDescriptor[] = []
+    for (const panel of panels.values()) {
+        _panels.push({
+            left: panel.edgeLeft?.id ?? null,
+            right: panel.edgeRight?.id ?? null,
+            top: panel.edgeTop?.id ?? null,
+            bottom: panel.edgeBottom?.id ?? null,
+            content: panel.children.map(c => c.contentSelector),
+            activeIdx: panel.children.length != 0 ? panel.children.indexOf(panel._activePane!) : 0
+        })
+    }
+
+    return {
+        width: containerSize.width,
+        height: containerSize.height,
+        edges: _edges,
+        panels: _panels
+    }
 }
+
+/** Can be used to restore layout previously retrieved by `GetLayout()` method or from
+ * `layoutUpdated` event.
+ */
+function SetLayout(layoutDesc: T.LayoutDescriptor): void {
+    panels.clear()
+    edges.clear()
+    panes.clear()
+
+    /* New entities are created with new IDs, so establish mapping with the saved ones. */
+    const _edges = new Map<T.Id, Edge>()
+    for (const edgeDesc of layoutDesc.edges) {
+        _edges.set(edgeDesc.id, _CreateEdge(edgeDesc.orientation, edgeDesc.position))
+    }
+
+    function GetEdge(id: T.Id): Edge {
+        const edge = _edges.get(id)
+        if (!edge) {
+            throw new Error("Referenced edge not found: " + id)
+        }
+        return edge
+    }
+
+    for (const panelDesc of layoutDesc.panels) {
+        const panel = _CreatePanel()
+        if (panelDesc.right != null) {
+            panel.BindEdge(GetEdge(panelDesc.right), T.Direction.RIGHT)
+        }
+        if (panelDesc.left != null) {
+            panel.BindEdge(GetEdge(panelDesc.left), T.Direction.LEFT)
+        }
+        if (panelDesc.top != null) {
+            panel.BindEdge(GetEdge(panelDesc.top), T.Direction.UP)
+        }
+        if (panelDesc.bottom != null) {
+            panel.BindEdge(GetEdge(panelDesc.bottom), T.Direction.DOWN)
+        }
+        for (let index = 0; index < panelDesc.content.length; index++) {
+            panel.InsertContent(index, panelDesc.content[index])
+        }
+        panel.SelectActive(panelDesc.activeIdx)
+    }
+
+    _AdaptSize(layoutDesc.width, layoutDesc.height, containerSize.width, containerSize.height)
+
+    for (const panel of panels.values()) {
+        panel.UpdateRect()
+    }
+}
+
+/** Reset current layout to single empty panel. */
+function ClearLayout(): void {
+    panels.clear()
+    edges.clear()
+    panes.clear()
+    _CreatePanel().UpdateRect()
+}
+
+defineExpose({
+    GetLayout,
+    SetLayout,
+    ClearLayout
+})
 
 // /////////////////////////////////////////////////////////////////////////////////////////////////
 // Private types
-
-type Id = string
-
-enum Orientation {
-    VERTICAL,
-    HORIZONTAL
-}
 
 type Vector = {
     x: number,
@@ -211,12 +291,12 @@ class Rect {
         this.height = height
     }
 
-    GetAxisCoord(orientation: Orientation): number {
-        return orientation === Orientation.HORIZONTAL ? this.x : this.y
+    GetAxisCoord(orientation: T.Orientation): number {
+        return orientation === T.Orientation.HORIZONTAL ? this.x : this.y
     }
 
-    GetAxisSize(orientation: Orientation): number {
-        return orientation === Orientation.HORIZONTAL ? this.width : this.height
+    GetAxisSize(orientation: T.Orientation): number {
+        return orientation === T.Orientation.HORIZONTAL ? this.width : this.height
     }
 
     static GetPositionStyle(x: number, y: number, width: number, height: number): Vue.CSSProperties {
@@ -270,22 +350,22 @@ type EdgeDragInfo = {
 
 /** Moveable edge. Panels may have some of their edges bound to one such. */
 class Edge {
-    readonly id: Id = _GenerateId()
-    readonly orientation: Orientation
+    readonly id: T.Id = _GenerateId()
+    readonly orientation: T.Orientation
     /** Coordinate along corresponding axis in container CS. */
     position: number
     /** First list is for panel having this edge left or top, second one for panels having this
      * edge right or bottom.
      */
-    readonly children: Map<Id, Panel>[] = [new Map(), new Map()]
+    private readonly children: Map<T.Id, Panel>[] = [new Map(), new Map()]
     /** Separator element. */
     element?: HTMLElement
     /** True when being dragged. */
-    readonly isActive: Vue.Ref<boolean> = ref(false)
+    readonly isActive = ref(false)
     /** Update when links to panels changed. */
-    readonly layoutTracker = new ReactiveTracker()
+    private readonly layoutTracker = new ReactiveTracker()
     /** Drag in progress when `pointerId` is not null. */
-    readonly dragInfo: EdgeDragInfo = {
+    private readonly dragInfo: EdgeDragInfo = {
         pointerId: null,
         startPointerPos: 0,
         startPos: 0,
@@ -293,9 +373,14 @@ class Edge {
         maxPos: 0
     }
 
-    constructor(orientation: Orientation, position: number) {
+    constructor(orientation: T.Orientation, position: number) {
         this.orientation = orientation
         this.position = position
+    }
+
+    get isEmpty() {
+        /* Second one should be empty as well by consistency condition. */
+        return this.children[0].size == 0
     }
 
     Destroy() {
@@ -323,13 +408,13 @@ class Edge {
 
     /** @return Direction from panel point of view). */
     GetDirection(isPreceding: boolean): T.Direction {
-        if (this.orientation === Orientation.HORIZONTAL) {
+        if (this.orientation === T.Orientation.HORIZONTAL) {
             return isPreceding ? T.Direction.DOWN : T.Direction.UP
         }
         return isPreceding ? T.Direction.RIGHT : T.Direction.LEFT
     }
 
-    GetChildren(side: T.Direction): Map<Id, Panel> {
+    GetChildren(side: T.Direction): Map<T.Id, Panel> {
         return this.children[Edge.IsPreceding(side) ? 0 : 1]
     }
 
@@ -349,7 +434,7 @@ class Edge {
         }
         const p = props.splitterDragZoneSize / 2
         let style: Vue.CSSProperties
-        if (this.orientation === Orientation.HORIZONTAL) {
+        if (this.orientation === T.Orientation.HORIZONTAL) {
             style = {
                 top: this.position - p + "px",
                 height: props.splitterDragZoneSize + "px",
@@ -364,13 +449,13 @@ class Edge {
                 height: maxCoord! - minCoord! + "px"
             }
         }
-        style.cursor = this.orientation === Orientation.HORIZONTAL ? "row-resize": "col-resize"
+        style.cursor = this.orientation === T.Orientation.HORIZONTAL ? "row-resize": "col-resize"
         return style
     }
 
     StartDrag(e: PointerEvent): void {
         this.dragInfo.pointerId = e.pointerId
-        this.dragInfo.startPointerPos = this.orientation === Orientation.HORIZONTAL ?
+        this.dragInfo.startPointerPos = this.orientation === T.Orientation.HORIZONTAL ?
             e.pageY : e.pageX
         this.isActive.value = true
         this.element!.setPointerCapture(e.pointerId)
@@ -430,7 +515,7 @@ class Edge {
             return
         }
         const dragDelta =
-            (this.orientation === Orientation.HORIZONTAL ? e.pageY : e.pageX) -
+            (this.orientation === T.Orientation.HORIZONTAL ? e.pageY : e.pageX) -
             this.dragInfo.startPointerPos
         let newPos = this.dragInfo.startPos + dragDelta
         if (newPos < this.dragInfo.minPos) {
@@ -567,8 +652,8 @@ const dragDataType = "application/x-panels-layout"
 /** Attached to drag event in `dataTransfer` property. */
 interface DragData {
     /** Null for dragging empty pane. */
-    paneId: Id | null,
-    panelId: Id,
+    paneId: T.Id | null,
+    panelId: T.Id,
     contentSelector: T.ContentSelector | null
 }
 
@@ -576,7 +661,7 @@ interface DragData {
  * @param s Data type from drag event.
  * @return Source pane ID if data type matches, null if no match.
  */
-function ParseDragDataType(s: string): Id | null {
+function ParseDragDataType(s: string): T.Id | null {
     if (!s.startsWith(dragDataType)) {
         return null
     }
@@ -592,8 +677,8 @@ class DropController {
     readonly element: HTMLElement
     readonly abortController = new AbortController()
     readonly isHovered = ref(false)
-    readonly mode: Vue.Ref<T.DragAndDropMode | null> = ref(null)
-    sourceId: Id | null = null
+    readonly mode= ref<T.DragAndDropMode | null>(null)
+    sourceId: T.Id | null = null
     enterNesting: number = 0
 
     constructor(element: HTMLElement | Vue.Component, panel: Panel) {
@@ -692,7 +777,7 @@ class DropController {
 }
 
 class Panel {
-    readonly id: Id = _GenerateId()
+    readonly id: T.Id = _GenerateId()
     /** It is either bound to some edge or to container corresponding edge if null. */
     edgeLeft: Edge | null = null
     edgeTop: Edge | null = null
@@ -716,7 +801,7 @@ class Panel {
     expandTarget: Panel | null = null
     expandDirection: T.Direction = T.Direction.UP
     readonly dragControllers: Map<any, DragController> = shallowReactive(new Map())
-    readonly dropController: Vue.ShallowRef<DropController | null> = shallowRef(null)
+    readonly dropController = shallowRef<DropController | null>(null)
 
     get isDragged(): boolean {
         for (const ctrl of this.dragControllers.values()) {
@@ -883,7 +968,7 @@ class Panel {
         return prevEdge
     }
 
-    GetMinSize(orientation: Orientation): number {
+    GetMinSize(orientation: T.Orientation): number {
         //XXX may be dynamic, depend on tabs visibility and content
         return props.minSplitterContentSize
     }
@@ -895,7 +980,7 @@ class Panel {
      *      inserted next to this one.
      * @return New edge if split successful, null if split not possible.
      */
-    Split(orientation: Orientation, splitPos: number, newFirst: boolean): Edge | null {
+    Split(orientation: T.Orientation, splitPos: number, newFirst: boolean): Edge | null {
         const initialSize = this.rect.GetAxisSize(orientation)
         if (initialSize < props.minSplitterContentSize * 2 + props.panelsSpacing) {
             return null
@@ -1083,10 +1168,10 @@ class Panel {
         } else {
             target.UpdateRect()
         }
-        if (edge.children[0].size == 0) {
+        if (edge.isEmpty) {
             edge.Destroy()
         }
-        if (expandPosEdge.children[0].size == 0) {
+        if (expandPosEdge.isEmpty) {
             expandPosEdge.Destroy()
         }
         this.UpdateRect()
@@ -1195,7 +1280,7 @@ class Panel {
 
                 const newFirst = d.x > d.y ? dir.x > 0 : dir.y > 0
                 const edge = this.Split(
-                    d.x > d.y ? Orientation.HORIZONTAL : Orientation.VERTICAL,
+                    d.x > d.y ? T.Orientation.HORIZONTAL : T.Orientation.VERTICAL,
                     d.x > d.y ? clientCoord.x : clientCoord.y,
                     newFirst)
 
@@ -1394,7 +1479,7 @@ class DragController {
     readonly pane: ContentPane | null
     readonly _panel: Panel | null
     readonly element: HTMLElement
-    readonly isDragged: Vue.Ref<boolean> = ref(false)
+    readonly isDragged = ref(false)
     readonly abortController = new AbortController()
     dragPending = false
 
@@ -1454,12 +1539,12 @@ class DragController {
 
 /** Contains instantiated content component. */
 class ContentPane {
-    readonly id: Id = _GenerateId()
+    readonly id: T.Id = _GenerateId()
     readonly contentSelector: T.ContentSelector
     readonly contentDesc: T.ContentDescriptor
     parent: Panel
     readonly dragControllers: Map<any, DragController> = shallowReactive(new Map())
-    readonly dropController: Vue.ShallowRef<DropController | null> = shallowRef(null)
+    readonly dropController = shallowRef<DropController | null>(null)
 
     constructor(selector: T.ContentSelector, desc: T.ContentDescriptor, parent: Panel) {
         this.contentSelector = selector
@@ -1648,14 +1733,13 @@ class ReactiveTracker {
 // /////////////////////////////////////////////////////////////////////////////////////////////////
 // Private state and methods
 
-const panels: Map<Id, Panel> = shallowReactive(new Map())
-const panes: Map<Id, ContentPane> = shallowReactive(new Map())
-const edges: Map<Id, Edge> = shallowReactive(new Map())
-const container: Vue.Ref<HTMLDivElement | null> = ref(null)
+const panels: Map<T.Id, Panel> = shallowReactive(new Map())
+const panes: Map<T.Id, ContentPane> = shallowReactive(new Map())
+const edges: Map<T.Id, Edge> = shallowReactive(new Map())
+const container = ref<HTMLDivElement | null>(null)
 const resizeObserver = new ResizeObserver(_OnContainerResize)
-/** Tracks all changes in content hierarchy. */
 const containerSize = reactive({width: 0, height: 0})
-const expandGhost: Vue.Ref<ExpandGhostInfo | null> = ref(null)
+const expandGhost = ref<ExpandGhostInfo | null>(null)
 
 function _Assert(condition: boolean, message: string): asserts condition {
     if (!condition) {
@@ -1663,7 +1747,7 @@ function _Assert(condition: boolean, message: string): asserts condition {
     }
 }
 
-function _GenerateId(): Id {
+function _GenerateId(): T.Id {
     return Date.now().toString(36).slice(-6) +
         Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString(36)
 }
@@ -1682,8 +1766,9 @@ function _GetCornerOrientation(corner: T.Corner): Vector {
     }
 }
 
-function _OppositeOrientation(orientation: Orientation): Orientation {
-    return orientation === Orientation.HORIZONTAL ? Orientation.VERTICAL : Orientation.HORIZONTAL
+function _OppositeOrientation(orientation: T.Orientation): T.Orientation {
+    return orientation === T.Orientation.HORIZONTAL ?
+        T.Orientation.VERTICAL : T.Orientation.HORIZONTAL
 }
 
 function _OppositeDirection(dir: T.Direction): T.Direction {
@@ -1699,8 +1784,8 @@ function _OppositeDirection(dir: T.Direction): T.Direction {
     }
 }
 
-function _OrientationDirection(orientation: Orientation, positive: boolean): T.Direction {
-    if (orientation === Orientation.HORIZONTAL) {
+function _OrientationDirection(orientation: T.Orientation, positive: boolean): T.Direction {
+    if (orientation === T.Orientation.HORIZONTAL) {
         return positive ? T.Direction.RIGHT : T.Direction.LEFT
     } else {
         return positive ? T.Direction.DOWN : T.Direction.UP
@@ -1743,23 +1828,27 @@ function *_GetAllNonEmptyPanels(): Generator<Panel> {
     }
 }
 
-function _OnContainerResize(entries: ResizeObserverEntry[]) {
+function _AdaptSize(oldWidth: number, oldHeight: number, newWidth: number, newHeight: number): void {
+    const widthRatio = newWidth / oldWidth
+    const heightRatio = newHeight / oldHeight
+    for (const edge of edges.values()) {
+        if (edge.orientation === T.Orientation.VERTICAL) {
+            edge.position *= widthRatio
+        } else {
+            edge.position *= heightRatio
+        }
+    }
+    //XXX handle minimal size and redistribute somehow if such is reached for some panels
+}
+
+function _OnContainerResize(entries: ResizeObserverEntry[]): void {
     const sz = entries[0].contentBoxSize[0]
 
     if (containerSize.width > 0 && containerSize.height > 0 &&
         sz.inlineSize > 0 && sz.blockSize > 0) {
 
-        const widthRatio = sz.inlineSize / containerSize.width
-        const heightRatio = sz.blockSize / containerSize.height
-        for (const edge of edges.values()) {
-            if (edge.orientation === Orientation.VERTICAL) {
-                edge.position *= widthRatio
-            } else {
-                edge.position *= heightRatio
-            }
-        }
+        _AdaptSize(containerSize.width, containerSize.height, sz.inlineSize, sz.blockSize)
     }
-    //XXX handle minimal size and redistribute somehow if such is reached for some panels
 
     containerSize.width = sz.inlineSize
     containerSize.height = sz.blockSize
@@ -1811,7 +1900,7 @@ function _CalculateExpandRect(r1: Rect, r2: Rect, dir: T.Direction): Rect | null
     return new Rect(x, y, right - x, bottom - y)
 }
 
-function _CreateEdge(orientation: Orientation, position: number) {
+function _CreateEdge(orientation: T.Orientation, position: number) {
     const edge = new Edge(orientation, position)
     edges.set(edge.id, edge)
     return edge
@@ -1866,7 +1955,7 @@ class DropTarget {
     }
 }
 
-const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
+const dragSource = computed<DragSource | null>(() => {
     for (const pane of _GetAllContent()) {
         if (pane.isDragged) {
             return new DragSource(pane)
@@ -1875,7 +1964,7 @@ const dragSource: Vue.ComputedRef<DragSource | null> = computed(() => {
     return null
 })
 
-const dropTarget: Vue.ComputedRef<DropTarget | null> = computed(() => {
+const dropTarget = computed<DropTarget | null>(() => {
     for (const panel of panels.values()) {
         if (panel.isDropHovered) {
             return new DropTarget(panel)

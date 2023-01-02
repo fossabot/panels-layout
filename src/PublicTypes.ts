@@ -1,3 +1,5 @@
+import * as Vue from "vue"
+
 /**
  * User-defined data which is used as a key to get actual component and its properties when
  * instantiating layout. Plain types should be used to allow easy serialization.
@@ -65,3 +67,16 @@ export const enum DragAndDropMode {
 }
 
 export type DragAndDropModeSelectorFunc = (event: DragEvent) => DragAndDropMode
+
+export type ContentSlotProps = {
+    contentDesc: ContentDescriptor
+    contentSelector: ContentSelector
+    setContent: (contentSelector: ContentSelector) => void
+    setDraggable: (id: any, element: HTMLElement | Vue.Component | null) => void
+    createTab: (contentSelector: ContentSelector, position?: TabPosition, switchTo?: boolean) => void
+    closeTab: () => void
+    isTab: boolean
+    tabIndex: number
+    isActive: boolean
+    setActive: () => void
+}

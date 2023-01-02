@@ -1518,7 +1518,7 @@ class ContentPane {
         return false
     }
 
-    get slotProps() {
+    get slotProps(): T.ContentSlotProps {
         return {
             contentDesc: this.contentDesc,
             contentSelector: this.contentSelector,

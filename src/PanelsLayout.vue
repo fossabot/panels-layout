@@ -173,7 +173,7 @@ const props = withDefaults(defineProps<{
 })
 
 const _Emit = defineEmits<{
-    /** Fired when layout is changed. */
+    /** Fired when layout is changed. XXX not implemented */
     (e: "layoutUpdated", layoutDesc: T.LayoutDescriptor): void
 }>()
 
@@ -1818,14 +1818,6 @@ function *_GetAllEmptyPanels(): Generator<Panel> {
     }
 }
 
-function *_GetAllNonEmptyPanels(): Generator<Panel> {
-    for (const panel of panels.values()) {
-        if (!panel.isEmpty) {
-            yield panel
-        }
-    }
-}
-
 function _AdaptSize(oldWidth: number, oldHeight: number, newWidth: number, newHeight: number): void {
     const widthRatio = newWidth / oldWidth
     const heightRatio = newHeight / oldHeight
@@ -1904,18 +1896,27 @@ function _CreateEdge(orientation: T.Orientation, position: number) {
     return edge
 }
 
-//XXX content descriptor
 function _CreatePanel() {
-    const panel = new Panel()//XXX
+    const panel = new Panel()
     panels.set(panel.id, panel)
     //XXX event
     return panel
 }
 
 onMounted(() => {
-    const r = container.value!.getClientRects()[0]
-    containerSize.width = r.width
-    containerSize.height = r.height
+    const rects = container.value!.getClientRects()
+    let width, height
+    if (rects.length != 0) {
+        const r = rects[0]
+        width = r.width
+        height = r.height
+    } else {
+        /* Some stub values to initialize layout. */
+        width = 600
+        height = 400
+    }
+    containerSize.width = width
+    containerSize.height = height
     _CreatePanel().UpdateRect()
     resizeObserver.observe(container.value!)
 })

@@ -1905,7 +1905,7 @@ function _CreatePanel() {
 
 onMounted(() => {
     const rects = container.value!.getClientRects()
-    let width, height
+    let width: number, height: number
     if (rects.length != 0) {
         const r = rects[0]
         width = r.width

@@ -60,7 +60,6 @@
             @pointercancel="panel.OnGripPointerUp($event, corner)"
             @pointermove="panel.OnGripPointerMove($event, corner)" >
 
-            <!-- XXX active needed? -->
             <slot name="cornerGrip" :corner="corner" :active="grip.isActive.value">
                 <div class="cornerGripIcon" :class="{active: grip.isActive.value}"
                     :style="panel.GetCornerGripIconStyle(corner)" />
@@ -615,7 +614,6 @@ type ExpandGhostInfo = {
 class CornerGrip {
     element?: HTMLElement
     readonly staticStyle: Vue.CSSProperties
-    //XXX is needed?
     readonly isActive = ref(false)
 
     constructor(staticStyle: Vue.CSSProperties) {

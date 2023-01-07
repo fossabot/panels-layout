@@ -17,6 +17,7 @@ export interface ContentDescriptor {
     hideInactive?: boolean
 }
 
+/** ID type for all layout entities. */
 export type Id = string
 
 export const enum Orientation {
@@ -24,14 +25,19 @@ export const enum Orientation {
     HORIZONTAL
 }
 
+/** Factory for content descriptor. Should provide all data for pane instantiation based on
+ * user-defined content selector.
+ */
 export type ContentDescriptorProvider = (selector: ContentSelector) => ContentDescriptor
 
+/** Serialization type for layout edge. */
 export type EdgeDescriptor = {
     id: Id
     orientation: Orientation
     position: number
 }
 
+/** Serialization type for layout panel. */
 export type PanelDescriptor = {
     left: Id | null
     right: Id | null
@@ -41,9 +47,7 @@ export type PanelDescriptor = {
     activeIdx: number
 }
 
-/**
- * Serializable type for saving and restoring current layout.
- */
+/** Serializable type for saving and restoring current layout. */
 export type LayoutDescriptor = {
     width: number
     height: number

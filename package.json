@@ -1,9 +1,8 @@
 {
     "name": "@lavaflow/panels-layout",
-    "version": "0.0.1",
+    "version": "1.0.0",
     "description": "Blender-like panels and tabs layout library",
     "author": "Artyom Lebedev <artyom.lebedev@gmail.com>",
-    "private": true,
     "dependencies": {
         "vue": "^3.2.41"
     },

@@ -173,8 +173,8 @@ const props = withDefaults(defineProps<{
 })
 
 const _Emit = defineEmits<{
-    /** Fired when layout is changed. XXX not implemented */
-    (e: "layoutUpdated", layoutDesc: T.LayoutDescriptor): void
+    /** Fired when layout is changed. */
+    (e: "layoutUpdated", layoutDescProvider: () => T.LayoutDescriptor): void
 }>()
 
 function GetLayout(): T.LayoutDescriptor {
@@ -489,6 +489,7 @@ class Edge {
         this.isActive.value = false
         this.element!.releasePointerCapture(this.dragInfo.pointerId)
         this.dragInfo.pointerId = null
+        _EmitLayoutUpdated()
     }
 
     OnPointerDown(e: PointerEvent): void {
@@ -1000,6 +1001,7 @@ class Panel {
 
         this.UpdateRect()
         panel.UpdateRect()
+        _EmitLayoutUpdated()
         return edge
     }
 
@@ -1174,6 +1176,7 @@ class Panel {
         }
         this.UpdateRect()
         targetSplit?.UpdateRect()
+        _EmitLayoutUpdated()
     }
 
     /**
@@ -1248,6 +1251,7 @@ class Panel {
         this.gripDragInfo.state = GripDragState.INITIAL
         this.expandTarget = null
         expandGhost.value = null
+        _EmitLayoutUpdated()
     }
 
     OnGripPointerUp(e: PointerEvent, corner: T.Corner): void {
@@ -1338,6 +1342,7 @@ class Panel {
         if (this._activePane != pane) {
             this._activePane = pane
             this.layoutTracker.Trigger()
+            _EmitLayoutUpdated()
         }
     }
 
@@ -1367,6 +1372,7 @@ class Panel {
             this._activePane = newPane
         }
         this.layoutTracker.Trigger()
+        _EmitLayoutUpdated()
     }
 
     InsertContent(position: number, contentSelector: T.ContentSelector): void {
@@ -1377,6 +1383,7 @@ class Panel {
             this._activePane = pane
         }
         this.layoutTracker.Trigger()
+        _EmitLayoutUpdated()
     }
 
     SelectActive(desiredPosition: number) {
@@ -1399,6 +1406,7 @@ class Panel {
         }
         pane.Destroy()
         this.layoutTracker.Trigger()
+        _EmitLayoutUpdated()
     }
 
     SetEmptyDraggable(id: any, element: HTMLElement | Vue.Component | null): void {
@@ -1469,6 +1477,7 @@ class Panel {
         }
 
         this.layoutTracker.Trigger()
+        _EmitLayoutUpdated()
     }
 }
 
@@ -1846,6 +1855,8 @@ function _OnContainerResize(entries: ResizeObserverEntry[]): void {
     for (const panel of panels.values()) {
         panel.UpdateRect()
     }
+
+    _EmitLayoutUpdated()
 }
 
 function _PageToLayoutCoord(x: number, y: number): Vector {
@@ -1888,6 +1899,10 @@ function _CalculateExpandRect(r1: Rect, r2: Rect, dir: T.Direction): Rect | null
         return null
     }
     return new Rect(x, y, right - x, bottom - y)
+}
+
+function _EmitLayoutUpdated(): void {
+    _Emit("layoutUpdated", GetLayout)
 }
 
 function _CreateEdge(orientation: T.Orientation, position: number) {

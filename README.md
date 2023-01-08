@@ -7,7 +7,7 @@ for Vue 3). The behavior is mostly inspired (but not fully equal to) by similar
 functionality in Blender 3D editor, however it is written from scratch, Blender source code
 was not referenced.
 
-https://user-images.githubusercontent.com/6065976/211197855-e9c5013d-2adc-46ee-81c7-be2eaec72641.mp4
+[Example video](https://user-images.githubusercontent.com/6065976/211197855-e9c5013d-2adc-46ee-81c7-be2eaec72641.mp4)
 
 The appearance is fully defined by the application code, not this package. This is mostly
 by utilizing Vue slots feature, so there are slots for almost all elements of the layout.

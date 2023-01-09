@@ -8,7 +8,7 @@ functionality in [Blender](https://www.blender.org) 3D editor, however it is wri
 
 [Example video](https://user-images.githubusercontent.com/6065976/211197855-e9c5013d-2adc-46ee-81c7-be2eaec72641.mp4)
 
-The appearance is fully defined by the application code, not this package. This is mostly
+The appearance is fully defined by the application code, not this package. This is done mostly
 by utilizing Vue slots feature, so there are slots for almost all elements of the layout.
 Therefore it is not bound to any UI building framework. For example, the demo page mentioned above
 uses Quasar but it can be anything compatible with Vue.

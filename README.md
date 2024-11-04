@@ -1,4 +1,6 @@
 # Panels and tabs layout system
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fvagran%2Fpanels-layout.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fvagran%2Fpanels-layout?ref=badge_shield)
+
 
 *See demo [here](https://vagran.github.io/panels-layout-demo/).*
 
@@ -94,3 +96,7 @@ among tabs to place the pane in.
 some panel limit is reached. Currently this limit is accounted only when dragging edges.
    * The container should have CSS `min-height` and `min-width` properties calculated based on
 panels content specified minimal size.
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fvagran%2Fpanels-layout.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fvagran%2Fpanels-layout?ref=badge_large)
